@@ -54,8 +54,8 @@ type MobileCallbacks interface {
 //	    val samlURL = JSONObject(result).getString("saml_url")
 //	    // open samlURL in browser, collect SAMLResponse via ACS server
 //	    val err = mc.completeSAMLFlow(samlToken)
-//	    if (err.isNotEmpty()) { /* handle error */ }
-//	} else if (result.isNotEmpty()) { /* handle error */ }
+//	    if (err.isNotEmpty()) { return }
+//	} else if (result.isNotEmpty()) { return }
 //
 // For non-SSO profiles (cert-auth, user-pass) call connect() directly.
 type MobileClient struct {
@@ -165,11 +165,11 @@ func (m *MobileClient) Disconnect() string {
 	return ""
 }
 
-// Wait blocks until the tunnel is fully torn down.
+// WaitForDisconnect blocks until the tunnel is fully torn down.
 // Returns "" for a clean disconnect, or an error description otherwise.
 // Call this after Disconnect to ensure resources are freed.
-func (m *MobileClient) Wait() string {
-	if err := m.inner.Wait(); err != nil {
+func (m *MobileClient) WaitForDisconnect() string {
+	if err := m.inner.WaitForDisconnect(); err != nil {
 		return err.Error()
 	}
 	return ""

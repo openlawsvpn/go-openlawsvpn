@@ -132,7 +132,7 @@ func TestConnectNoCRV1(t *testing.T) {
 		t.Logf("Connect: TUN not available (%v) — checking auth events only", err)
 	}
 	client.Disconnect() //nolint:errcheck
-	client.Wait()       //nolint:errcheck
+	client.WaitForDisconnect() //nolint:errcheck
 
 	time.Sleep(300 * time.Millisecond)
 
@@ -199,7 +199,7 @@ func TestConnectCRV1Flow(t *testing.T) {
 		t.Logf("ConnectPhase2Reuse: TUN not available (%v) — checking auth events only", err)
 	}
 	client.Disconnect() //nolint:errcheck
-	client.Wait()       //nolint:errcheck
+	client.WaitForDisconnect() //nolint:errcheck
 
 	time.Sleep(300 * time.Millisecond)
 

@@ -115,13 +115,13 @@ func main() {
 			if err := client.Disconnect(); err != nil {
 				fmt.Fprintf(os.Stderr, "ovpn3: disconnect error: %v\n", err)
 			}
-			if err := client.Wait(); err != nil {
+			if err := client.WaitForDisconnect(); err != nil {
 				fmt.Fprintf(os.Stderr, "ovpn3: wait error: %v\n", err)
 			}
 			fmt.Fprintln(os.Stderr, "ovpn3: disconnected")
 			return
 		case <-client.Done():
-			reason := client.Wait()
+			reason := client.WaitForDisconnect()
 			if reason == nil || ctx.Err() != nil {
 				// Clean disconnect or signal — exit.
 				fmt.Fprintln(os.Stderr, "ovpn3: disconnected")

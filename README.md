@@ -18,7 +18,7 @@ CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
 sudo ./ovpn3 -config your.ovpn
 
 # Android .aar (requires gomobile + Android NDK)
-gomobile bind -o go-openvpn3.aar -target android -androidapi 26 \
+gomobile bind -o go-openvpn3.aar -target android -androidapi 31 \
     github.com/openlawsvpn/go-openvpn3
 ```
 

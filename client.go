@@ -14,7 +14,7 @@
 //	err = c.Connect(ctx)
 //	// tunnel is now up; data flows through the TUN device
 //	c.Disconnect()
-//	c.Wait()
+//	c.WaitForDisconnect()
 package vpn
 
 import (
@@ -824,10 +824,10 @@ func (c *Client) Disconnect() error {
 	return nil
 }
 
-// Wait blocks until the client is fully disconnected and returns the
-// disconnect reason (nil for a clean Disconnect call).
-// It is safe to call Wait concurrently from multiple goroutines.
-func (c *Client) Wait() error {
+// WaitForDisconnect blocks until the client is fully disconnected and returns
+// the disconnect reason (nil for a clean Disconnect call).
+// It is safe to call WaitForDisconnect concurrently from multiple goroutines.
+func (c *Client) WaitForDisconnect() error {
 	<-c.doneCh
 	c.mu.Lock()
 	err := c.doneErr
@@ -900,7 +900,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		}
 
 		c.Disconnect() //nolint:errcheck
-		c.Wait()       //nolint:errcheck
+		c.WaitForDisconnect() //nolint:errcheck
 		c.reset()
 
 		tokenValid := token != "" && stateID != "" && serverIP != "" &&
@@ -928,7 +928,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 				// original AuthnRequest and cannot be reused with a new session.
 				// Reset to stateNew so the caller can run a fresh Connect.
 				c.Disconnect() //nolint:errcheck
-				c.Wait()       //nolint:errcheck
+				c.WaitForDisconnect() //nolint:errcheck
 				c.reset()
 				return ErrReauthRequired
 			}
