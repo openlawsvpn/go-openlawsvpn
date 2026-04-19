@@ -1,18 +1,21 @@
-NDK_VERSION   := 30.0.14904198
-ANDROID_API   := 31
-MODULE        := github.com/openlawsvpn/go-openvpn3
-VERSION       ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-GOPATH        ?= $(shell go env GOPATH)
+NDK_VERSION      := 30.0.14904198
+ANDROID_API      := 31
+ANDROID_SDK_HOME ?= $(HOME)/Android/Sdk
+MODULE           := github.com/openlawsvpn/go-openvpn3
+VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GOPATH           ?= $(shell go env GOPATH)
 
 # Prefer the go-installed gomobile over any system package.
 export PATH := $(GOPATH)/bin:$(PATH)
 
-# Resolve NDK home: honour explicit override, then derive from ANDROID_SDK_ROOT/HOME.
+# Resolve NDK home: honour explicit override, then try common locations.
 ifndef ANDROID_NDK_HOME
   ifdef ANDROID_SDK_ROOT
     ANDROID_NDK_HOME := $(ANDROID_SDK_ROOT)/ndk/$(NDK_VERSION)
   else ifdef ANDROID_HOME
     ANDROID_NDK_HOME := $(ANDROID_HOME)/ndk/$(NDK_VERSION)
+  else
+    ANDROID_NDK_HOME := $(ANDROID_SDK_HOME)/ndk/$(NDK_VERSION)
   endif
 endif
 

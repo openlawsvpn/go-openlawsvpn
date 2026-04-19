@@ -47,7 +47,7 @@ type MobileCallbacks interface {
 //
 // Usage from Android/Kotlin (AWS SSO profile):
 //
-//	val mc = Vpn.newMobileClient("/data/.../client.ovpn", callbacks)
+//	val mc = Vpn.newMobileClient(profile.configContent, callbacks)
 //	// start SAML flow — returns JSON {"saml_url":"...","state_id":"..."} or error
 //	val result = mc.startSAMLFlow()
 //	if (result.startsWith("{")) {
@@ -65,12 +65,12 @@ type MobileClient struct {
 	cb     MobileCallbacks
 }
 
-// NewMobileClient creates a MobileClient from the .ovpn file at profilePath.
+// NewMobileClient creates a MobileClient from the .ovpn profile content string.
 // cb may be nil (callbacks are skipped — useful on Linux for testing).
 // Panics (and causes a Java exception via gomobile) if the profile cannot be
-// parsed; callers should validate the path before calling this.
-func NewMobileClient(profilePath string, cb MobileCallbacks) *MobileClient {
-	p, err := profile.ParsePath(profilePath)
+// parsed; callers should validate the content before calling this.
+func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
+	p, err := profile.ParseString(profileContent)
 	if err != nil {
 		// gomobile converts Go panics to Java exceptions.
 		panic("vpn: NewMobileClient: " + err.Error())
