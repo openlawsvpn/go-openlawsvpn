@@ -12,6 +12,8 @@ on:
 jobs:
   build-aar:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -89,7 +91,7 @@ jobs:
         if: github.event_name == 'push'
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.ANDROID_GO_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           repository: openlawsvpn/openlawsvpn-android-go
           event-type: go-openvpn3-release
           client-payload: '{"version": "${{ steps.version.outputs.tag }}"}'
