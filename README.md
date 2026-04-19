@@ -32,6 +32,24 @@ go test -race ./...
 go test -v -tags=integration -timeout 120s .
 ```
 
+## CI / CD
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| **CI** (`ci.yml`) | push / PR to `main` | `go build`, `go test -race`, `go vet` |
+| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openvpn3.aar` via `gomobile bind`, publishes GitHub Release, notifies `openlawsvpn-android-go` to open a version-bump PR |
+
+### Publishing a new release
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub Release, then fires a `repository_dispatch` to `openlawsvpn-android-go` — which opens a PR bumping `goOpenvpn3Version` automatically.
+
+**Required secret** in this repo: `ANDROID_GO_PAT` — a GitHub PAT with `repo` scope on `openlawsvpn/openlawsvpn-android-go`.
+
 ## Known limitations
 
 ### OpenVPN-PRF key derivation (plain OpenVPN 2.x)
