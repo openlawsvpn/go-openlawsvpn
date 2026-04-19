@@ -95,6 +95,8 @@ jobs:
     uses: openlawsvpn/openlawsvpn-android-go/.github/workflows/bump-aar.yml@main
     with:
       version: ${{ needs.build-aar.outputs.tag }}
+    secrets:
+      ANDROID_GO_PAT: ${{ secrets.ANDROID_GO_PAT }}
     permissions:
       contents: write
       pull-requests: write
