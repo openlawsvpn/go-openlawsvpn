@@ -119,8 +119,8 @@ func TestReconnectContextCancelled(t *testing.T) {
 // that is closed after Disconnect+Wait complete.
 func TestDoneChannelClosedAfterDisconnect(t *testing.T) {
 	c := vpn.New(makeTestProfile())
-	c.Disconnect() //nolint:errcheck
-	c.Wait()       //nolint:errcheck
+	c.Disconnect()            //nolint:errcheck
+	c.WaitForDisconnect()     //nolint:errcheck
 	select {
 	case <-c.Done():
 		// expected
