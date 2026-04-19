@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
@@ -87,11 +89,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Notify openlawsvpn-android-go to bump AAR version
-        if: github.event_name == 'push'
-        uses: peter-evans/repository-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: openlawsvpn/openlawsvpn-android-go
-          event-type: go-openvpn3-release
-          client-payload: '{"version": "${{ steps.version.outputs.tag }}"}'
+  bump-android-go:
+    needs: build-aar
+    if: github.event_name == 'push'
+    uses: openlawsvpn/openlawsvpn-android-go/.github/workflows/bump-aar.yml@main
+    with:
+      version: ${{ needs.build-aar.outputs.tag }}
+    permissions:
+      contents: write
+      pull-requests: write
