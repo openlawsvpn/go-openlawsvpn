@@ -96,7 +96,5 @@ jobs:
     with:
       version: ${{ needs.build-aar.outputs.tag }}
     secrets:
-      ANDROID_GO_PAT: ${{ secrets.ANDROID_GO_PAT }}
-    permissions:
-      contents: write
-      pull-requests: write
+      CI_APP_ID: ${{ secrets.CI_APP_ID }}
+      CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
