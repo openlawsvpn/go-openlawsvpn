@@ -173,6 +173,13 @@ func (a *Agent) runOnce(ctx context.Context) error {
 	for {
 		msg, err := ws.readMessage(ctx)
 		if err != nil {
+			if ctx.Err() != nil {
+				// Graceful shutdown: tell the relay we are going offline so the
+				// app sees the correct status immediately instead of waiting for
+				// the server to detect the dropped TCP connection.
+				bgCtx := context.Background()
+				a.sendStatus(bgCtx, "", "offline", "")
+			}
 			ws.close() // unblock the ping goroutine immediately
 			<-pingDone
 			return err
