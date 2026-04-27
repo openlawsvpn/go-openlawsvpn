@@ -19,11 +19,10 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-GUI_REPO     ?= $(realpath ../openlawsvpn)
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon rpm srpm builddep _sources _check-gui-repo
+.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon rpm srpm builddep
 
 all: aar
 
@@ -83,16 +82,16 @@ daemon:
 	CGO_ENABLED=0 go build -o openlawsvpn-daemon ./cmd/daemon
 
 ## Build source tarballs and RPMs (requires GUI_REPO=../openlawsvpn)
-srpm: _check-gui-repo _sources
-	rpmbuild -bs $(SPEC) \
-	    --define "_topdir $(RPM_OUTDIR)" \
-	    --define "_sourcedir $(RPM_OUTDIR)/SOURCES"
+srpm:
+	mkdir -p $(RPM_OUTDIR)
+	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
 	@echo "SRPM: $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm')"
 
-rpm: _check-gui-repo _sources
-	rpmbuild -bb $(SPEC) \
-	    --define "_topdir $(RPM_OUTDIR)" \
-	    --define "_sourcedir $(RPM_OUTDIR)/SOURCES"
+rpm:
+	mkdir -p $(RPM_OUTDIR)
+	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
+	rpmbuild --rebuild $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1) \
+	    --define "_topdir $(RPM_OUTDIR)"
 	@echo ""
 	@echo "RPMs built:"
 	@find $(RPM_OUTDIR)/RPMS -name '*.rpm'
@@ -103,27 +102,6 @@ rpm: _check-gui-repo _sources
 ## Show missing RPM build dependencies
 builddep: srpm
 	dnf builddep --assumeno $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1)
-
-# Internal: pack source tarballs from working trees (not just HEAD, so
-# uncommitted edits in gui-gtk/ are included).
-_sources: _check-gui-repo
-	mkdir -p $(RPM_OUTDIR)/SOURCES
-	# go-openvpn3: pack from git HEAD (daemon source is committed)
-	git archive --prefix=go-openvpn3/ HEAD | gzip > $(RPM_OUTDIR)/SOURCES/go-openvpn3.tar.gz
-	# gui-gtk: pack working tree so uncommitted Cargo.toml changes are included
-	tar -C $(GUI_REPO) \
-	    --exclude='gui-gtk/target' \
-	    --exclude='gui-gtk/.cargo' \
-	    --transform='s,^gui-gtk,gui-gtk,' \
-	    -czf $(RPM_OUTDIR)/SOURCES/openlawsvpn-gui-gtk.tar.gz \
-	    gui-gtk/
-
-_check-gui-repo:
-	@test -d "$(GUI_REPO)/gui-gtk" || { \
-	    echo "ERROR: GUI_REPO not found at $(GUI_REPO)"; \
-	    echo "       Set GUI_REPO=/path/to/openlawsvpn"; \
-	    exit 1; \
-	}
 
 ## Remove build artefacts
 clean:

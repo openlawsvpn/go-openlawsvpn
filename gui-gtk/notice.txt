@@ -1,0 +1,44 @@
+Open Source Notices
+===================
+
+openlawsvpn
+-----------
+License:  LGPL-2.1-or-later with usage exception
+Source:   https://github.com/openlawsvpn/openlawsvpn
+
+The usage exception permits shipping this library in proprietary products
+without source-release obligations for your application code.
+
+openvpn3-core
+-------------
+License:       AGPL-3.0-or-later
+Upstream:      https://github.com/OpenVPN/openvpn3
+Modifications: https://github.com/openlawsvpn/openlawsvpn (openvpn3-core/)
+
+Source is available at the repositories above per AGPL-3.0 Section 13.
+
+ASIO
+----
+License: Boost Software License 1.0 (BSL-1.0)
+Source:  https://github.com/chriskohlhoff/asio
+(included as part of openvpn3-core)
+
+OpenSSL
+-------
+License: Apache License 2.0
+Source:  https://github.com/openssl/openssl
+
+LZ4
+---
+License: BSD 2-Clause License
+Source:  https://github.com/lz4/lz4
+
+AndroidX / Jetpack
+------------------
+License: Apache License 2.0
+Source:  https://cs.android.com/androidx
+
+Kotlin Standard Library
+-----------------------
+License: Apache License 2.0
+Source:  https://github.com/JetBrains/kotlin
