@@ -135,7 +135,7 @@ func (m *MobileClient) StartSAMLFlow() string {
 	b, err := json.Marshal(map[string]string{
 		"saml_url":  challenge.URL,
 		"state_id":  challenge.StateID,
-		"remote_ip": challenge.RemoteIP,
+		"remote_ip": m.inner.Phase1IP(),
 	})
 	if err != nil {
 		return fmt.Sprintf("vpn: marshal challenge: %v", err)

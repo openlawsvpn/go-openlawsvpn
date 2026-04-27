@@ -1048,6 +1048,15 @@ func (c *Client) Stats() Stats {
 	return s
 }
 
+// Phase1IP returns the sticky backend IP captured during Phase 1.
+// This is the IP the agent must use for Phase 2 to ensure server affinity.
+// Returns "" before Phase 1 completes.
+func (c *Client) Phase1IP() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.phase1IP
+}
+
 // LocalIP returns the tunnel-side IP address assigned by the server after a
 // successful Phase 2, or "" if the tunnel is not up.
 func (c *Client) LocalIP() string {
