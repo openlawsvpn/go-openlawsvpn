@@ -1,0 +1,24 @@
+[Unit]
+Description=openlawsvpn VPN daemon
+Documentation=https://openlawsvpn.com
+After=network.target dbus.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/openlawsvpn-daemon
+Restart=on-failure
+RestartSec=3
+
+# Allow TUN creation and routing without running as root.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+
+# Hardening — drop everything else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/openlawsvpn
+
+[Install]
+WantedBy=default.target

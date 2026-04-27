@@ -187,6 +187,11 @@ type Client struct {
 	// Nil on Linux desktop — tun.Open() is used directly.
 	TUNSetup func(ifconfigJSON string, mtu int) (*tun.Device, error)
 
+	// EventFn, if set, is called for every notable lifecycle event: state
+	// transitions, log lines, and periodic stats. Called from internal
+	// goroutines — must not block. Set before calling Connect.
+	EventFn EventFn
+
 	// reconnect
 	// MaxReconnects is the maximum number of reconnect attempts before giving
 	// up. A value of 0 means unlimited retries. Default is 0 (unlimited).
@@ -215,6 +220,23 @@ type Client struct {
 	tlsSecrets *tlsSecretCapture
 }
 
+// emit delivers an event to EventFn when set, and mirrors it to stderr otherwise.
+// Safe to call from any goroutine.
+func (c *Client) emit(e Event) {
+	e.At = time.Now()
+	if c.EventFn != nil {
+		c.EventFn(e)
+		return
+	}
+	// Fallback: keep existing stderr behaviour so the CLI still works.
+	switch e.Type {
+	case EventLog:
+		fmt.Fprintf(os.Stderr, "%s\n", e.Message)
+	case EventStateChanged:
+		fmt.Fprintf(os.Stderr, "vpn: state → %s\n", e.State)
+	}
+}
+
 // New creates a new Client from the given profile.
 // The Client is idle until Connect is called.
 func New(p *profile.Profile) *Client {
@@ -241,6 +263,8 @@ func New(p *profile.Profile) *Client {
 func (c *Client) Connect(ctx context.Context) error {
 	flow := c.prof.DetectFlow()
 
+	c.emit(Event{Type: EventStateChanged, State: StateConnecting})
+
 	switch flow {
 	case profile.FlowAWSSSO:
 		if c.SAMLTokenFn == nil {
@@ -248,27 +272,40 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 		challenge, err := c.connectPhase1(ctx)
 		if err != nil {
+			c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
 			return err
 		}
 		var token string
 		if challenge != nil {
+			c.emit(Event{Type: EventStateChanged, State: StateWaitingSAML, Message: challenge.URL})
 			token, err = c.SAMLTokenFn(ctx, *challenge)
 			if err != nil {
+				c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
 				return fmt.Errorf("vpn: collect SAML token: %w", err)
 			}
+			c.emit(Event{Type: EventStateChanged, State: StateConnecting})
 		}
-		return c.connectPhase2(ctx, token)
+		if err := c.connectPhase2(ctx, token); err != nil {
+			c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
+			return err
+		}
+		return nil
 
 	default:
 		// FlowCertAuth and FlowUserPass: single-phase — dial and get PUSH_REPLY.
 		challenge, err := c.connectPhase1(ctx)
 		if err != nil {
+			c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
 			return err
 		}
 		if challenge != nil {
 			return fmt.Errorf("vpn: unexpected SAML challenge for non-SSO profile")
 		}
-		return c.connectPhase2(ctx, "")
+		if err := c.connectPhase2(ctx, ""); err != nil {
+			c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
+			return err
+		}
+		return nil
 	}
 }
 
@@ -308,7 +345,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 		h, _, _ := net.SplitHostPort(ra.String())
 		if h != "" {
 			c.phase1IP = h
-			fmt.Fprintf(os.Stderr, "vpn: Phase 1 resolved to %s\n", h)
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: Phase 1 resolved to %s", h)})
 		}
 	}
 
@@ -464,10 +501,10 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	if samlToken != "" {
 		if !expiry.IsZero() {
 			ttl := time.Until(expiry).Round(time.Second)
-			fmt.Fprintf(os.Stderr, "vpn: SAML token expires at %s (TTL %s)\n",
-				expiry.UTC().Format(time.RFC3339), ttl)
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+				"vpn: SAML token expires at %s (TTL %s)", expiry.UTC().Format(time.RFC3339), ttl)})
 		} else {
-			fmt.Fprintf(os.Stderr, "vpn: SAML token expiry unknown (no NotOnOrAfter in assertion)\n")
+			c.emit(Event{Type: EventLog, Message: "vpn: SAML token expiry unknown (no NotOnOrAfter in assertion)"})
 		}
 	}
 
@@ -735,8 +772,8 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 				return tunErr
 			}
 		}
-		fmt.Fprintf(os.Stderr, "vpn: TUN interface %s up, local=%s mtu=%d\n",
-			dev.Name(), pushOpts.Ifconfig.Local, tunMTU)
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: TUN interface %s up, local=%s mtu=%d", dev.Name(), pushOpts.Ifconfig.Local, tunMTU)})
 		c.tunDev = dev
 	}
 
@@ -744,7 +781,18 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	c.mu.Lock()
 	c.state = stateTunnelUp
 	c.connectedAt = time.Now()
+	serverIP := c.phase1IP
+	assignedIP := ""
+	if pushOpts.Ifconfig != nil {
+		assignedIP = pushOpts.Ifconfig.Local.String()
+	}
 	c.mu.Unlock()
+	c.emit(Event{
+		Type:     EventStateChanged,
+		State:    StateConnected,
+		ServerIP: serverIP,
+		Message:  assignedIP,
+	})
 
 	// Start data-channel goroutines.
 	cctx, cancel := context.WithCancel(context.Background())
@@ -805,6 +853,8 @@ func (c *Client) Disconnect() error {
 	c.state = stateDisconnecting
 	c.mu.Unlock()
 
+	c.emit(Event{Type: EventStateChanged, State: StateDisconnecting})
+
 	if c.cancelFn != nil {
 		c.cancelFn()
 	}
@@ -818,6 +868,7 @@ func (c *Client) Disconnect() error {
 		c.mu.Lock()
 		c.state = stateDisconnected
 		c.mu.Unlock()
+		c.emit(Event{Type: EventStateChanged, State: StateIdle})
 		close(c.doneCh)
 	}()
 
@@ -912,8 +963,10 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		}
 
 		// Fast path: skip Phase 1, go directly to Phase 2 with cached context.
-		fmt.Fprintf(os.Stderr, "vpn: reconnect attempt %d — reusing token (TTL %s) ip=%s\n",
-			attempt, time.Until(expiry).Round(time.Second), serverIP)
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: reconnect attempt %d — reusing token (TTL %s) ip=%s",
+			attempt, time.Until(expiry).Round(time.Second), serverIP)})
+		c.emit(Event{Type: EventStateChanged, State: StateConnecting})
 
 		c.mu.Lock()
 		c.challenge = &saml.Challenge{StateID: stateID}
@@ -922,7 +975,8 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		c.mu.Unlock()
 
 		if err := c.connectPhase2(ctx, token); err != nil {
-			fmt.Fprintf(os.Stderr, "vpn: reconnect attempt %d Phase 2 failed: %v\n", attempt, err)
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+				"vpn: reconnect attempt %d Phase 2 failed: %v", attempt, err)})
 			if strings.Contains(err.Error(), "AUTH_FAILED") {
 				// Server's CRV1 session expired. SAML token is bound to the
 				// original AuthnRequest and cannot be reused with a new session.
@@ -1603,7 +1657,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 			if isTimeout(err) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "vpn: tunToWire: TUN read error: %v\n", err)
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: tunToWire: TUN read error: %v", err)})
 			return
 		}
 		plain := buf[:n]
@@ -1730,7 +1784,7 @@ func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart in
 			if pingRestart > 0 {
 				last := time.Unix(0, c.lastRecv.Load())
 				if time.Since(last) >= time.Duration(pingRestart)*time.Second {
-					fmt.Fprintf(os.Stderr, "vpn: keepalive: no data for %d seconds, disconnecting\n", pingRestart)
+					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: keepalive: no data for %d seconds, disconnecting", pingRestart)})
 					c.mu.Lock()
 					if c.doneErr == nil {
 						c.doneErr = fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", pingRestart)
@@ -1780,7 +1834,7 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 			}
 
 			if expired {
-				fmt.Fprintf(os.Stderr, "vpn: inactive: no traffic for %d seconds, disconnecting\n", timeout)
+				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: inactive: no traffic for %d seconds, disconnecting", timeout)})
 				c.mu.Lock()
 				if c.doneErr == nil {
 					c.doneErr = fmt.Errorf("vpn: inactive timeout: no traffic for %d seconds", timeout)
@@ -1838,7 +1892,7 @@ func (c *Client) rekeyLoop(ctx context.Context) {
 				continue
 			}
 			if err := c.doRekey(ctx); err != nil {
-				fmt.Fprintf(os.Stderr, "vpn: rekey failed: %v\n", err)
+				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey failed: %v", err)})
 				// Non-fatal: the session continues with the old key until it expires.
 				// openvpn3-core schedules a retry; we'll try again on the next tick.
 			}
@@ -1866,7 +1920,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 		return fmt.Errorf("no active connection")
 	}
 
-	fmt.Fprintf(os.Stderr, "vpn: initiating key renegotiation (key_id=%d)\n", keyID)
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: initiating key renegotiation (key_id=%d)", keyID)})
 
 	// Create a new controlSession for the renegotiated TLS session.
 	// Sequence numbers for each rekey epoch start at 0.
@@ -1978,7 +2032,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 	// Reference: openvpn3-core ssl/proto.hpp ProtoContext::promote_secondary_to_primary()
 	// line ~4634: primary.swap(secondary); primary->rekey(PRIMARY_SECONDARY_SWAP).
 	c.manager.Rotate(newCh)
-	fmt.Fprintf(os.Stderr, "vpn: rekey complete (key_id=%d)\n", keyID)
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey complete (key_id=%d)", keyID)})
 
 	// Update the stored TLS connection for future EKM exports (if needed).
 	c.mu.Lock()
