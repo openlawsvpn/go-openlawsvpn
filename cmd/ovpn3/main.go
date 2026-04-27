@@ -150,7 +150,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("ovpn3: tunnel up")
+	fmt.Fprintf(os.Stderr, "ovpn3: tunnel up — local=%s tun=%s\n",
+		outboundIP(), client.LocalIP())
 
 	// Wait for signal or server-initiated disconnect (e.g. keepalive timeout).
 	// If the disconnect was caused by a dead link, attempt to reconnect.
@@ -194,7 +195,8 @@ func main() {
 					os.Exit(1)
 				}
 			}
-			fmt.Println("ovpn3: tunnel up")
+			fmt.Fprintf(os.Stderr, "ovpn3: tunnel up — local=%s tun=%s\n",
+				outboundIP(), client.LocalIP())
 		}
 	}
 }
@@ -325,13 +327,15 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		if err := client.ConnectPhase2(ctx, payload.SAMLResponse); err != nil {
 			return fmt.Errorf("relay: phase2 connect: %w", err)
 		}
-		fmt.Fprintln(os.Stderr, "ovpn3: relay: tunnel up")
+		localIP := outboundIP()
+		fmt.Fprintf(os.Stderr, "ovpn3: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
+			localIP, client.LocalIP(), payload.RemoteIP)
 
 		// Notify the relay (and therefore the app) that the tunnel is up.
 		// Report the machine's outbound IP, not the VPN tunnel IP, so the App
 		// can show which host is running the tunnel.
 		if agentPtr != nil {
-			agentPtr.SendStatus(ctx, payload.SessionID, "connected", outboundIP())
+			agentPtr.SendStatus(ctx, payload.SessionID, "connected", localIP)
 		}
 
 		// Wait for disconnect or context cancel.

@@ -137,6 +137,23 @@ func TestLocalIPBeforeConnect(t *testing.T) {
 	}
 }
 
+// TestPhase1IPBeforeConnect verifies Phase1IP returns "" before any connection.
+func TestPhase1IPBeforeConnect(t *testing.T) {
+	c := vpn.New(makeTestProfile())
+	if ip := c.Phase1IP(); ip != "" {
+		t.Errorf("Phase1IP before connect = %q, want empty", ip)
+	}
+}
+
+// TestPhase1IPAfterSetRelayPhase2 verifies Phase1IP returns the seeded value.
+func TestPhase1IPAfterSetRelayPhase2(t *testing.T) {
+	c := vpn.New(makeTestProfile())
+	c.SetRelayPhase2("203.0.113.42", "state-abc")
+	if ip := c.Phase1IP(); ip != "203.0.113.42" {
+		t.Errorf("Phase1IP = %q, want 203.0.113.42", ip)
+	}
+}
+
 // TestSetRelayPhase2 verifies SetRelayPhase2 pre-seeds Phase 1 state so
 // ConnectPhase2 can be called without a prior connectPhase1.
 func TestSetRelayPhase2(t *testing.T) {
