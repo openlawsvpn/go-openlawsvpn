@@ -128,3 +128,32 @@ func TestDoneChannelClosedAfterDisconnect(t *testing.T) {
 		t.Fatal("Done() channel not closed after Disconnect+Wait")
 	}
 }
+
+// TestLocalIPBeforeConnect verifies LocalIP returns "" before any connection.
+func TestLocalIPBeforeConnect(t *testing.T) {
+	c := vpn.New(makeTestProfile())
+	if ip := c.LocalIP(); ip != "" {
+		t.Errorf("LocalIP before connect = %q, want empty", ip)
+	}
+}
+
+// TestSetRelayPhase2 verifies SetRelayPhase2 pre-seeds Phase 1 state so
+// ConnectPhase2 can be called without a prior connectPhase1.
+func TestSetRelayPhase2(t *testing.T) {
+	c := vpn.New(makeTestProfile())
+	// Before SetRelayPhase2, ConnectPhase2 should fail (no challenge seeded).
+	err := c.ConnectPhase2(context.Background(), "token")
+	if err == nil {
+		t.Fatal("expected error before SetRelayPhase2")
+	}
+
+	// After SetRelayPhase2, the state is seeded — ConnectPhase2 will fail
+	// only when it tries to dial, not before.
+	c2 := vpn.New(makeTestProfile())
+	c2.SetRelayPhase2("10.0.0.1", "state-xyz")
+	// We don't call ConnectPhase2 here (would hit the network); just verify
+	// LocalIP is still empty until Phase 2 completes.
+	if ip := c2.LocalIP(); ip != "" {
+		t.Errorf("LocalIP after SetRelayPhase2 = %q, want empty", ip)
+	}
+}

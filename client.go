@@ -1005,6 +1005,32 @@ func (c *Client) ConnectPhase2Reuse(ctx context.Context, samlToken string) error
 	return c.connectPhase2(ctx, samlToken)
 }
 
+// SetRelayPhase2 pre-seeds the Phase 1 state obtained by the mobile/desktop app
+// so that ConnectPhase2 can skip Phase 1 and connect directly to the sticky
+// backend IP with the SAML credentials delivered via the relay.
+//
+// Must be called before ConnectPhase2 and only when using relay mode.
+// remoteIP is the backend server IP from the CRV1 challenge; stateID is the
+// opaque CRV1 state token.
+func (c *Client) SetRelayPhase2(remoteIP, stateID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = stateConnecting
+	c.phase1IP = remoteIP
+	c.challenge = &saml.Challenge{
+		StateID:  stateID,
+		RemoteIP: remoteIP,
+	}
+}
+
+// ConnectPhase2 completes the VPN connection using a SAML token delivered via
+// the relay server. Call SetRelayPhase2 first to pre-seed Phase 1 state.
+//
+// samlToken is the base64-encoded SAMLResponse received from the relay.
+func (c *Client) ConnectPhase2(ctx context.Context, samlToken string) error {
+	return c.connectPhase2(ctx, samlToken)
+}
+
 // Stats returns a snapshot of current traffic counters and uptime.
 // Safe to call concurrently while the tunnel is up.
 func (c *Client) Stats() Stats {
@@ -1020,6 +1046,18 @@ func (c *Client) Stats() Stats {
 		s.Uptime = time.Since(up)
 	}
 	return s
+}
+
+// LocalIP returns the tunnel-side IP address assigned by the server after a
+// successful Phase 2, or "" if the tunnel is not up.
+func (c *Client) LocalIP() string {
+	c.mu.Lock()
+	opts := c.pushOpts
+	c.mu.Unlock()
+	if opts == nil || opts.Ifconfig == nil {
+		return ""
+	}
+	return opts.Ifconfig.Local.String()
 }
 
 // ---- internal helpers --------------------------------------------------------

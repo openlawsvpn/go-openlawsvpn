@@ -19,7 +19,7 @@ ifndef ANDROID_NDK_HOME
   endif
 endif
 
-.PHONY: all aar aar-sha256 cli test lint clean
+.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean
 
 all: aar
 
@@ -51,6 +51,17 @@ aar-sha256: go-openvpn3.aar
 cli:
 	CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
 
+## Build the local relay-server test binary
+relay-server:
+	CGO_ENABLED=0 go build -o relay-server ./cmd/relay-server
+
+## Start the local relay server for testing (default port 18080, override with RELAY_ADDR)
+## Agent:  ovpn3 -config tunnel.ovpn -relay <token> -relay-endpoint ws://localhost:18080/ws
+## App:    set endpoint to http://<host>:18080/api/v1
+RELAY_ADDR ?= :18080
+run-local-relay:
+	CGO_ENABLED=0 go run ./cmd/relay-server -addr $(RELAY_ADDR)
+
 ## Run unit tests
 test:
 	go test -race ./...
@@ -65,4 +76,4 @@ lint:
 
 ## Remove build artefacts
 clean:
-	rm -f go-openvpn3.aar go-openvpn3.aar.sha256 go-openvpn3-sources.jar ovpn3
+	rm -f go-openvpn3.aar go-openvpn3.aar.sha256 go-openvpn3-sources.jar ovpn3 relay-server

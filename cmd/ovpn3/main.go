@@ -7,14 +7,26 @@
 // Usage:
 //
 //	ovpn3 -config <path.ovpn> [-saml-token <base64token>]
+//	ovpn3 -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>] [-hostname <name>]
+//	ovpn3 -relay <token> -config <path.ovpn> [...]   # -config optional in relay mode
 //
 // Flags:
 //
-//	-config     Path to the .ovpn profile file (required).
-//	-saml-token Base64-encoded SAMLResponse.  When omitted, the CLI starts
-//	            an ACS server on 127.0.0.1:35001 and waits for the browser
-//	            callback, or reads the token from standard input if stdin
-//	            is not a TTY.
+//	-config          Path to the .ovpn profile file.
+//	                 Required for direct (non-relay) mode.
+//	                 Optional in relay mode — the app always sends the profile inside
+//	                 the phase2 payload; -config is only used as a fallback if the
+//	                 payload carries no ovpn_config.
+//	-saml-token      Base64-encoded SAMLResponse.  When omitted, the CLI starts
+//	                 an ACS server on 127.0.0.1:35001 and waits for the browser
+//	                 callback, or reads the token from standard input if stdin
+//	                 is not a TTY.
+//	-relay           Organisation token for relay mode.  When set, the CLI connects
+//	                 to the relay WebSocket and waits for the mobile/desktop app to
+//	                 deliver credentials; Phase 1 and SAML run on the app, not here.
+//	-relay-endpoint  Relay WebSocket URL (default: wss://relay.openlawsvpn.com/ws).
+//	-agent-id        Stable UUID for this agent (default: random, changes on restart).
+//	-hostname        Human-readable label shown in the app (default: os.Hostname).
 //
 // The command prints the SAML URL to stdout, waits for authentication, then
 // prints "tunnel up" once the tunnel is established.  Send SIGINT or SIGTERM
@@ -40,12 +52,50 @@ import (
 	vpn "github.com/openlawsvpn/go-openvpn3"
 	"github.com/openlawsvpn/go-openvpn3/auth/saml"
 	"github.com/openlawsvpn/go-openvpn3/profile"
+	"github.com/openlawsvpn/go-openvpn3/relay"
 )
 
 func main() {
-	configPath := flag.String("config", "", "path to .ovpn profile file (required)")
-	samlToken := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
+	configPath     := flag.String("config", "", "path to .ovpn profile file (required)")
+	samlToken      := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
+	relayToken     := flag.String("relay", "", "organisation token — enables relay mode")
+	relayEndpoint  := flag.String("relay-endpoint", "wss://relay.openlawsvpn.com/ws", "relay WebSocket URL")
+	relayAgentID   := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
+	relayHostname  := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
 	flag.Parse()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// Relay mode: -config is optional. The app delivers ovpn_config inside the
+	// phase2 payload, so no local profile is needed. If -config is provided it
+	// is used as a fallback when the payload carries no config.
+	if *relayToken != "" {
+		hostname := *relayHostname
+		if hostname == "" {
+			if h, err := os.Hostname(); err == nil {
+				hostname = h
+			} else {
+				hostname = "unknown"
+			}
+		}
+		var fallbackProfile *profile.Profile
+		if *configPath != "" {
+			fp, err := profile.ParsePath(*configPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ovpn3: parse config: %v\n", err)
+				os.Exit(1)
+			}
+			fallbackProfile = fp
+		}
+		runRelayMode(ctx, fallbackProfile, relay.Config{
+			Token:    *relayToken,
+			Hostname: hostname,
+			AgentID:  *relayAgentID,
+			Endpoint: *relayEndpoint,
+		})
+		return
+	}
 
 	if *configPath == "" {
 		fmt.Fprintln(os.Stderr, "ovpn3: -config flag is required")
@@ -58,9 +108,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ovpn3: parse config: %v\n", err)
 		os.Exit(1)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	client := vpn.New(p)
 
@@ -239,6 +286,70 @@ func isPermissionError(err error) bool {
 	return strings.Contains(s, "permission denied") ||
 		strings.Contains(s, "operation not permitted") ||
 		strings.Contains(s, "CAP_NET_ADMIN")
+}
+
+// runRelayMode connects to the relay server and waits for the mobile/desktop app to deliver
+// Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
+// runRelayMode starts the relay agent. fallback may be nil — the app always sends
+// ovpn_config in the phase2 payload, so a local profile is not required.
+func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Config) {
+	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
+
+	// agentPtr is set just after relay.New returns so the OnPhase2 closure can
+	// call SendStatus without a circular dependency.
+	var agentPtr *relay.Agent
+
+	cfg.OnPhase2 = func(ctx context.Context, payload relay.Phase2Payload) error {
+		fmt.Fprintf(os.Stderr, "ovpn3: relay: received phase2 for session %s\n", payload.SessionID)
+
+		// Payload config takes precedence; fall back to local profile if absent.
+		var connProfile *profile.Profile
+		if payload.OvpnConfig != "" {
+			cp, err := profile.ParseString(payload.OvpnConfig)
+			if err != nil {
+				return fmt.Errorf("relay: parse ovpn_config from payload: %w", err)
+			}
+			connProfile = cp
+		} else if fallback != nil {
+			connProfile = fallback
+		} else {
+			return fmt.Errorf("relay: no ovpn_config in payload and no -config flag provided")
+		}
+
+		client := vpn.New(connProfile)
+		// Pre-load the Phase 1 state that the app already obtained so connectPhase2
+		// skips Phase 1 entirely and connects directly to the sticky backend IP.
+		client.SetRelayPhase2(payload.RemoteIP, payload.StateID)
+
+		if err := client.ConnectPhase2(ctx, payload.SAMLResponse); err != nil {
+			return fmt.Errorf("relay: phase2 connect: %w", err)
+		}
+		fmt.Fprintln(os.Stderr, "ovpn3: relay: tunnel up")
+
+		// Notify the relay (and therefore the app) that the tunnel is up.
+		if agentPtr != nil {
+			agentPtr.SendStatus(ctx, payload.SessionID, "connected", client.LocalIP())
+		}
+
+		// Wait for disconnect or context cancel.
+		<-client.Done()
+		return client.WaitForDisconnect()
+	}
+
+	agent, err := relay.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ovpn3: relay: %v\n", err)
+		os.Exit(1)
+	}
+	agentPtr = agent
+
+	fmt.Fprintf(os.Stderr, "ovpn3: relay mode — agent_id=%s, waiting for app to connect...\n", agent.AgentID())
+
+	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
+		fmt.Fprintf(os.Stderr, "ovpn3: relay: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "ovpn3: relay: disconnected")
 }
 
 // protoName returns a human-readable protocol string.
