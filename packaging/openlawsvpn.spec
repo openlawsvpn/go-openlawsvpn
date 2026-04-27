@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-%global goipath github.com/openlawsvpn/go-openvpn3
+%global goipath    github.com/openlawsvpn/go-openvpn3
+%global extractdir go-openvpn3
 Name:           openlawsvpn
 Version:        0.1.0
 Release:        1%{?dist}
