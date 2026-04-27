@@ -22,7 +22,7 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon rpm srpm builddep
+.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon rpm srpm builddep vendor-tarball
 
 all: aar
 
@@ -81,17 +81,29 @@ lint:
 daemon:
 	CGO_ENABLED=0 go build -o openlawsvpn-daemon ./cmd/daemon
 
-## Build source tarballs and RPMs (requires GUI_REPO=../openlawsvpn)
-srpm:
-	mkdir -p $(RPM_OUTDIR)
+## Build source tarballs and RPMs
+## The Cargo vendor tarball must exist at $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz
+## Run 'make vendor-tarball' first if it does not.
+srpm: vendor-tarball
+	mkdir -p $(RPM_OUTDIR)/SRPMS
 	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
+	cp -n $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz \
+	    $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' -newer $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz | head -1 | xargs dirname) 2>/dev/null || true
 	@echo "SRPM: $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm')"
 
-rpm:
-	mkdir -p $(RPM_OUTDIR)
+vendor-tarball:
+	mkdir -p $(RPM_OUTDIR)/SOURCES
+	@if [ ! -f $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz ]; then \
+	  echo "Building Cargo vendor tarball (one-time, needs network)..."; \
+	  cd gui-gtk && cargo vendor vendor && tar czf $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz vendor/ && rm -rf vendor; \
+	fi
+
+rpm: vendor-tarball
+	mkdir -p $(RPM_OUTDIR)/SRPMS
 	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
 	rpmbuild --rebuild $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1) \
-	    --define "_topdir $(RPM_OUTDIR)"
+	    --define "_topdir $(RPM_OUTDIR)" \
+	    --define "_sourcedir $(RPM_OUTDIR)/SOURCES"
 	@echo ""
 	@echo "RPMs built:"
 	@find $(RPM_OUTDIR)/RPMS -name '*.rpm'
@@ -101,7 +113,8 @@ rpm:
 
 ## Show missing RPM build dependencies
 builddep: srpm
-	dnf builddep --assumeno $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1)
+	dnf builddep --assumeno $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1) \
+	    --define "_sourcedir $(RPM_OUTDIR)/SOURCES"
 
 ## Remove build artefacts
 clean:

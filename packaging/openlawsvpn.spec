@@ -9,6 +9,7 @@ Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 License:        BSL-1.1
 URL:            https://github.com/openlawsvpn/go-openvpn3
 Source0:        {{{ git_repo_pack }}}
+Source1:        openlawsvpn-vendor.tar.gz
 
 BuildRequires:  golang >= 1.21
 BuildRequires:  go-rpm-macros
@@ -52,7 +53,8 @@ No OpenVPN Inc runtime required.
 %prep
 %setup -T -b 0 -q -n go-openvpn3
 %goprep -e %{goipath}
-cd gui-gtk && %cargo_prep && cd -
+tar -C gui-gtk -xzf %{SOURCE1}
+cd gui-gtk && %cargo_prep -v vendor && cd -
 
 %generate_buildrequires
 cd gui-gtk && %cargo_generate_buildrequires && cd -
