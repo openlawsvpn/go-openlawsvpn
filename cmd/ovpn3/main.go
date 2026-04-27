@@ -43,6 +43,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -327,8 +328,10 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		fmt.Fprintln(os.Stderr, "ovpn3: relay: tunnel up")
 
 		// Notify the relay (and therefore the app) that the tunnel is up.
+		// Report the machine's outbound IP, not the VPN tunnel IP, so the App
+		// can show which host is running the tunnel.
 		if agentPtr != nil {
-			agentPtr.SendStatus(ctx, payload.SessionID, "connected", client.LocalIP())
+			agentPtr.SendStatus(ctx, payload.SessionID, "connected", outboundIP())
 		}
 
 		// Wait for disconnect or context cancel.
@@ -350,6 +353,18 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "ovpn3: relay: disconnected")
+}
+
+// outboundIP returns the machine's preferred outbound IP by opening a UDP
+// socket toward a public address (no packets are sent). Falls back to "" on
+// error so the relay still gets a status update without an IP.
+func outboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 // protoName returns a human-readable protocol string.
