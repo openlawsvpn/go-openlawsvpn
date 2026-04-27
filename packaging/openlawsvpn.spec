@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+%global goipath github.com/openlawsvpn/go-openvpn3
 Name:           openlawsvpn
 Version:        0.1.0
 Release:        1%{?dist}
@@ -58,7 +59,6 @@ cd gui-gtk && %cargo_generate_buildrequires && cd -
 # ── Build ──────────────────────────────────────────────────────────────────────
 
 %build
-%define goipath github.com/openlawsvpn/go-openvpn3
 export CGO_ENABLED=0
 %gobuild -o %{_builddir}/openlawsvpn-daemon %{goipath}/cmd/daemon
 
