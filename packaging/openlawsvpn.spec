@@ -50,7 +50,7 @@ No OpenVPN Inc runtime required.
 
 %prep
 %setup -T -b 0 -q -n go-openvpn3
-%goprep %{goipath}
+%goprep -e %{goipath}
 cd gui-gtk && %cargo_prep && cd -
 
 %generate_buildrequires
