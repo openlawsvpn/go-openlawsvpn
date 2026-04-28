@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        5%{?dist}
+Release:        6%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 License:        BSL-1.1
 URL:            https://github.com/openlawsvpn/go-openvpn3
 Source0:        {{{ git_repo_pack }}}
+Source1:        openlawsvpn-vendor.tar.gz
 
 BuildRequires:  golang >= 1.21
 BuildRequires:  cargo-rpm-macros
@@ -47,10 +48,8 @@ No OpenVPN Inc runtime required.
 
 %prep
 %setup -T -b 0 -q -n go-openvpn3
-cd gui-gtk && %cargo_prep && cd -
-
-%generate_buildrequires
-cd gui-gtk && %cargo_generate_buildrequires && cd -
+tar -C gui-gtk -xzf %{SOURCE1}
+cd gui-gtk && %cargo_prep -v vendor && cd -
 
 %build
 CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-daemon ./cmd/daemon
@@ -104,8 +103,11 @@ install -Dm644 packaging/openlawsvpn-gui.desktop \
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
 %changelog
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-6
+- spec: revert to vendor tarball; gtk4/libadwaita/zbus crates not packaged in Fedora
+
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-5
-- spec: drop vendor tarball; use %%cargo_generate_buildrequires with Fedora packaged crates
+- spec: drop vendor tarball; use %%cargo_generate_buildrequires with Fedora packaged crates (reverted)
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-4
 - daemon: add user@.service.d drop-in to grant CAP_NET_ADMIN to user manager
