@@ -17,6 +17,7 @@ pub enum VpnEvent {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum VpnState {
     Idle,
     Connecting,
@@ -28,6 +29,7 @@ pub enum VpnState {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum VpnCommand {
     Connect { config_path: String },
     Disconnect,

@@ -8,7 +8,7 @@ use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita::ApplicationWindow;
 use zbus::{interface, Connection};
-use zbus::object_server::SignalContext;
+use zbus::object_server::SignalEmitter;
 
 use std::sync::{Arc, Mutex, mpsc as stdmpsc};
 
@@ -114,11 +114,11 @@ impl StatusNotifierItem {
     fn scroll(&self, _delta: i32, _orientation: &str) {}
 
     #[zbus(signal)]
-    async fn new_status(signal_ctxt: &SignalContext<'_>, status: &str) -> zbus::Result<()>;
+    async fn new_status(signal_ctxt: &SignalEmitter<'_>, status: &str) -> zbus::Result<()>;
     #[zbus(signal)]
-    async fn new_icon(signal_ctxt: &SignalContext<'_>) -> zbus::Result<()>;
+    async fn new_icon(signal_ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
     #[zbus(signal)]
-    async fn new_tooltip(signal_ctxt: &SignalContext<'_>) -> zbus::Result<()>;
+    async fn new_tooltip(signal_ctxt: &SignalEmitter<'_>) -> zbus::Result<()>;
 }
 
 // ── DBusMenu ─────────────────────────────────────────────────────────────────
@@ -271,10 +271,10 @@ impl DbusMenu {
     fn about_to_show_group(&self, _ids: Vec<i32>) -> (Vec<i32>, Vec<i32>) { (vec![], vec![]) }
 
     #[zbus(signal)]
-    async fn layout_updated(signal_ctxt: &SignalContext<'_>, revision: u32, parent: i32) -> zbus::Result<()>;
+    async fn layout_updated(signal_ctxt: &SignalEmitter<'_>, revision: u32, parent: i32) -> zbus::Result<()>;
     #[zbus(signal)]
     async fn items_properties_updated(
-        signal_ctxt: &SignalContext<'_>,
+        signal_ctxt: &SignalEmitter<'_>,
         updated: Vec<(i32, std::collections::HashMap<String, zbus::zvariant::Value<'_>>)>,
         removed: Vec<(i32, Vec<String>)>,
     ) -> zbus::Result<()>;
@@ -289,18 +289,6 @@ pub struct TrayGuard {
 }
 
 impl TrayGuard {
-    pub fn exit(&self) {
-        let conn = self.conn.clone();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio rt");
-        rt.block_on(async move {
-            conn.close().await.ok();
-        });
-        std::process::exit(0);
-    }
-
     /// Notify the tray that connected state changed — updates icon and tooltip.
     pub fn notify_state(&self, connected: bool) {
         if let Ok(mut s) = self.state.lock() {
@@ -318,7 +306,7 @@ impl TrayGuard {
                     .interface::<_, StatusNotifierItem>("/StatusNotifierItem")
                     .await;
                 if let Ok(iface_ref) = iface_ref {
-                    let signal_ctxt = iface_ref.signal_context().clone();
+                    let signal_ctxt = iface_ref.signal_emitter().clone();
                     let status = if connected { "Active" } else { "Active" };
                     let _ = StatusNotifierItem::new_status(&signal_ctxt, status).await;
                     let _ = StatusNotifierItem::new_icon(&signal_ctxt).await;
