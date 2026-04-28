@@ -60,6 +60,17 @@ impl ProfileStore {
         let p = self.base_dir.join(id).join("config.ovpn");
         p.exists().then_some(p)
     }
+
+    /// Reverse-lookup: given a config file path, return the profile ID that owns it.
+    pub fn id_for_config_path(&self, config_path: &str) -> Option<String> {
+        let target = PathBuf::from(config_path);
+        for profile in self.list() {
+            if self.config_path(&profile.id).as_deref() == Some(&target) {
+                return Some(profile.id);
+            }
+        }
+        None
+    }
 }
 
 fn dirs_next() -> PathBuf {

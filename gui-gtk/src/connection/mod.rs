@@ -110,7 +110,16 @@ impl ConnectionScreen {
     }
 
     /// Called from main.rs when a VpnEvent::StateChanged arrives.
-    pub fn set_state(&mut self, state: ConnectionState) {
+    /// profile_path: the config file path the daemon is currently using (empty if idle).
+    pub fn set_state(&mut self, state: ConnectionState, profile_path: String) {
+        // When daemon reports an active connection on startup (or after reconnect),
+        // resolve the profile_path back to a profile ID so active_id is set correctly.
+        if !profile_path.is_empty() && !matches!(state, ConnectionState::Idle) {
+            let id = self.store.borrow().id_for_config_path(&profile_path);
+            *self.active_id.borrow_mut() = id;
+        } else if matches!(state, ConnectionState::Idle) {
+            *self.active_id.borrow_mut() = None;
+        }
         *self.state.borrow_mut() = state;
         self.refresh_list();
     }
@@ -217,12 +226,12 @@ impl ConnectionScreen {
                 let cur = state.borrow().clone();
 
                 if is_active && matches!(cur, ConnectionState::Connected { .. }) {
-                    // Disconnect
+                    // Disconnect — leave active_id set so the row keeps showing
+                    // "Disconnecting" spinner; set_state(Idle) will clear it.
                     let tx = vpn.cmd_tx.clone();
                     gtk4::glib::spawn_future_local(async move {
                         tx.send(VpnCommand::Disconnect).await.ok();
                     });
-                    *active_id.borrow_mut() = None;
                 } else {
                     // Connect
                     *active_id.borrow_mut() = Some(profile_id.clone());

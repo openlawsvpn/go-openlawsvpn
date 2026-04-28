@@ -21,6 +21,7 @@ BuildRequires:  systemd-rpm-macros
 %package daemon
 Summary:        openlawsvpn VPN daemon (D-Bus session service)
 Requires:       dbus
+Requires:       polkit
 %{?systemd_requires}
 
 %description daemon
@@ -68,6 +69,9 @@ install -Dm755 %{_builddir}/openlawsvpn-daemon \
 install -Dm644 cmd/daemon/openlawsvpn-daemon.service \
     %{buildroot}%{_userunitdir}/openlawsvpn-daemon.service
 
+install -Dm644 packaging/10-openlawsvpn-dns.rules \
+    %{buildroot}%{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
+
 mkdir -p %{buildroot}%{_datadir}/dbus-1/services
 cat > %{buildroot}%{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service << 'EOF'
 [D-BUS Service]
@@ -98,6 +102,7 @@ EOF
 %{_libexecdir}/openlawsvpn-daemon
 %{_userunitdir}/openlawsvpn-daemon.service
 %{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
+%{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
 
 %files gui
 %{_bindir}/openlawsvpn-gui
@@ -117,5 +122,16 @@ EOF
 # ── Changelog ──────────────────────────────────────────────────────────────────
 
 %changelog
-* Mon Apr 28 2025 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
+* Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
+- gui: system-tray support via StatusNotifierItem D-Bus protocol (appindicatorsupport on GNOME)
+- gui: custom heart SVG icons — red heart (connected), yellow broken heart (disconnected)
+- gui: tray icon always visible; icon swaps on state change instead of disappearing
+- gui: X button exits the application; minimize (_) hides to tray
+- gui: tray right-click menu — Show window, Connect/Disconnect VPN, Quit
+- gui: startup state sync — shows correct Disconnect button if daemon already connected
+- daemon: polkit rule for systemd-resolved DNS (no password prompt)
+- daemon: verbose structured logging with microsecond timestamps
+- daemon: Status() returns profile_path as 4th value for GUI sync
+- daemon: emit SAMLRequired signal with explicit D-Bus name (fixes zbus name mapping)
+- spec: add polkit Requires and install 10-openlawsvpn-dns.rules
 - Initial package: Go daemon + GTK4 GUI replacing openvpn3-linux dependency

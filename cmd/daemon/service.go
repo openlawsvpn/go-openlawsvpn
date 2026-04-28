@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -32,10 +33,11 @@ const (
 type DaemonService struct {
 	conn *dbus.Conn
 
-	mu     sync.Mutex
-	client *vpn.Client
-	cancel context.CancelFunc
-	state  vpn.ClientState
+	mu          sync.Mutex
+	client      *vpn.Client
+	cancel      context.CancelFunc
+	state       vpn.ClientState
+	profilePath string
 }
 
 func newDaemonService(conn *dbus.Conn) *DaemonService {
@@ -45,15 +47,18 @@ func newDaemonService(conn *dbus.Conn) *DaemonService {
 // Connect starts a VPN connection for the given .ovpn profile path.
 // Returns a D-Bus error if a connection is already active.
 func (d *DaemonService) Connect(profilePath string) *dbus.Error {
+	log.Printf("Connect: profile=%s", profilePath)
 	d.mu.Lock()
 	if d.client != nil {
 		d.mu.Unlock()
+		log.Printf("Connect: rejected — connection already active")
 		return dbus.NewError(dbusInterface+".Busy", []interface{}{"connection already active"})
 	}
 
 	p, err := profile.ParsePath(profilePath)
 	if err != nil {
 		d.mu.Unlock()
+		log.Printf("Connect: invalid profile: %v", err)
 		return dbus.NewError(dbusInterface+".InvalidProfile", []interface{}{err.Error()})
 	}
 
@@ -61,17 +66,20 @@ func (d *DaemonService) Connect(profilePath string) *dbus.Error {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.client = client
 	d.cancel = cancel
+	d.profilePath = profilePath
 	d.mu.Unlock()
 
 	// Wire event hook before calling Connect.
 	client.EventFn = func(e vpn.Event) {
 		switch e.Type {
 		case vpn.EventStateChanged:
+			log.Printf("state: %s serverIP=%q msg=%q", e.State, e.ServerIP, e.Message)
 			d.mu.Lock()
 			d.state = e.State
 			d.mu.Unlock()
 			d.emitStateChanged(e.State, e.ServerIP, e.Message)
 		case vpn.EventLog:
+			log.Printf("vpn: %s", e.Message)
 			d.emitLogLine(e.Message)
 		}
 	}
@@ -79,28 +87,47 @@ func (d *DaemonService) Connect(profilePath string) *dbus.Error {
 	// SAML: daemon runs the ACS server and emits SAMLRequired so the GUI opens
 	// the browser. This keeps port :35001 in the privileged daemon process.
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
+		log.Printf("saml: starting ACS server, SAML URL: %s", challenge.URL)
 		acs, err := saml.NewACSServer()
 		if err != nil {
+			log.Printf("saml: ACS server error: %v", err)
 			return "", fmt.Errorf("daemon: start ACS server: %w", err)
 		}
+		log.Printf("saml: ACS server ready, emitting SAMLRequired signal")
 		d.emitSAMLRequired(challenge.URL)
-		return acs.Wait(ctx)
+		log.Printf("saml: waiting for browser callback on :35001")
+		token, err := acs.Wait(ctx)
+		if err != nil {
+			log.Printf("saml: ACS wait error: %v", err)
+			return "", err
+		}
+		log.Printf("saml: token received (len=%d)", len(token))
+		return token, nil
 	}
 
 	go func() {
+		log.Printf("connect goroutine: starting")
 		defer func() {
+			log.Printf("connect goroutine: exiting, clearing client")
 			d.mu.Lock()
 			d.client = nil
 			d.cancel = nil
+			d.profilePath = ""
 			d.mu.Unlock()
 		}()
 
 		if err := client.Connect(ctx); err != nil {
 			if ctx.Err() == nil {
+				msg := err.Error()
+				log.Printf("connect error: %v", err)
 				d.emitLogLine(fmt.Sprintf("daemon: connect error: %v", err))
+				d.emitStateChanged(vpn.StateError, "", msg)
+			} else {
+				log.Printf("connect cancelled: %v", ctx.Err())
 			}
 			return
 		}
+		log.Printf("connect: tunnel up, starting stats loop")
 
 		// Emit periodic stats while tunnel is up.
 		ticker := time.NewTicker(statsInterval)
@@ -108,7 +135,9 @@ func (d *DaemonService) Connect(profilePath string) *dbus.Error {
 		for {
 			select {
 			case <-client.Done():
+				log.Printf("connect: client done signal")
 				if err := client.WaitForDisconnect(); err != nil && ctx.Err() == nil {
+					log.Printf("disconnect error: %v", err)
 					d.emitLogLine(fmt.Sprintf("daemon: disconnected: %v", err))
 				}
 				return
@@ -116,7 +145,8 @@ func (d *DaemonService) Connect(profilePath string) *dbus.Error {
 				s := client.Stats()
 				d.emitStatsUpdate(s.BytesSent, s.BytesRecv, uint64(s.Uptime.Seconds()))
 			case <-ctx.Done():
-				client.Disconnect()  //nolint:errcheck
+				log.Printf("connect: context cancelled, disconnecting")
+				client.Disconnect()        //nolint:errcheck
 				client.WaitForDisconnect() //nolint:errcheck
 				return
 			}
@@ -133,16 +163,20 @@ func (d *DaemonService) Disconnect() *dbus.Error {
 	cancel := d.cancel
 	d.mu.Unlock()
 	if cancel != nil {
+		log.Printf("Disconnect: cancelling active connection")
 		cancel()
+	} else {
+		log.Printf("Disconnect: no active connection")
 	}
 	return nil
 }
 
-// Status returns the current daemon state as (state, server_ip, assigned_ip).
-func (d *DaemonService) Status() (string, string, string, *dbus.Error) {
+// Status returns the current daemon state as (state, server_ip, assigned_ip, profile_path).
+func (d *DaemonService) Status() (string, string, string, string, *dbus.Error) {
 	d.mu.Lock()
 	st := d.state
 	client := d.client
+	profilePath := d.profilePath
 	d.mu.Unlock()
 
 	serverIP := ""
@@ -151,7 +185,7 @@ func (d *DaemonService) Status() (string, string, string, *dbus.Error) {
 		serverIP = client.Phase1IP()
 		assignedIP = client.LocalIP()
 	}
-	return st.String(), serverIP, assignedIP, nil
+	return st.String(), serverIP, assignedIP, profilePath, nil
 }
 
 // ---- signal helpers --------------------------------------------------------

@@ -17,6 +17,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -38,6 +39,7 @@ const introspectionXML = `
       <arg direction="out" type="s" name="state"/>
       <arg direction="out" type="s" name="server_ip"/>
       <arg direction="out" type="s" name="assigned_ip"/>
+      <arg direction="out" type="s" name="profile_path"/>
     </method>
     <signal name="StateChanged">
       <arg type="s" name="state"/>
@@ -60,6 +62,9 @@ const introspectionXML = `
 </node>`
 
 func main() {
+	log.SetFlags(log.Ltime | log.Lmicroseconds)
+	log.SetPrefix("daemon: ")
+
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "daemon: connect session bus: %v\n", err)

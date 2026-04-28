@@ -34,3 +34,4 @@ go.work.sum
 # Built binaries
 /mockserver
 /cmd/ovpn3/ovpn3
+/rpmbuild

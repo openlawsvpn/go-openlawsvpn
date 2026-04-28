@@ -10,7 +10,7 @@ use about_view::AboutView;
 use connection::{ConnectionScreen, ConnectionState};
 use log_view::LogView;
 use profile_store::ProfileStore;
-use tray::{TrayGuard, TrayState};
+use tray::TrayState;
 use vpn_service::{VpnEvent, VpnService, VpnState};
 
 use futures_util::StreamExt as _;
@@ -127,35 +127,71 @@ fn build_ui(app: &Application) {
         connected: false,
     }));
 
-    // Keep the zbus connection alive for the lifetime of the app.
-    let _tray_guard: Option<TrayGuard> = tray::register(window.clone(), tray_state.clone(), &vpn.rt_handle);
+    let tray_guard: Option<tray::TrayGuard> = tray::register(
+        window.clone(),
+        tray_state.clone(),
+        vpn.cmd_tx.clone(),
+        &vpn.rt_handle,
+    );
 
-    // Always intercept close-request: GTK4's default handler only hides
-    // the window (never destroys it), so the app would stay alive forever.
-    // - With tray: hide to tray.
-    // - Without tray: destroy the window so the GApplication hold is
-    //   released and the main loop exits normally.
-    // Background Tokio thread keeps the process alive after the GLib loop
-    // exits — always exit explicitly on window close.
-    window.connect_close_request(|_| {
+    // X button (close): always exit the app.
+    // D-Bus well-known name disappears automatically when the process exits,
+    // so gnome-shell removes the tray icon without needing explicit cleanup.
+    window.connect_close_request(move |_w| {
         std::process::exit(0);
     });
 
+    // _ (minimize) button: hide to tray instead of minimizing, when tray is active.
+    // Surface isn't available until the window is realized; hook into connect_realize
+    // (fires once) to attach the Toplevel state-change listener.
+    if tray_guard.is_some() {
+        use gtk4::gdk::prelude::ToplevelExt;
+        let window_weak = window.downgrade();
+        window.connect_realize(move |w| {
+            if let Some(surface) = w.surface() {
+                if let Ok(toplevel) = surface.downcast::<gtk4::gdk::Toplevel>() {
+                    let win = window_weak.clone();
+                    toplevel.connect_state_notify(move |tl| {
+                        use gtk4::gdk::ToplevelState;
+                        if tl.state().contains(ToplevelState::MINIMIZED) {
+                            if let Some(w) = win.upgrade() {
+                                w.set_visible(false);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
     // ── VPN event loop ───────────────────────────────────────────────────────
-    // Move strong Rc refs into the closure — weak refs become None after
-    // build_ui() returns because the GTK stack only holds the inner widget.
     let mut event_rx = vpn.take_event_rx();
 
     glib::spawn_future_local(async move {
         while let Some(event) = event_rx.next().await {
             match event {
-                VpnEvent::StateChanged(state) => {
-                    // Keep tray icon state in sync
+                VpnEvent::StateChanged { ref state, ref profile_path } => {
+                    let connected = matches!(state, VpnState::Connected { .. });
                     if let Ok(mut ts) = tray_state.lock() {
-                        ts.connected = matches!(state, VpnState::Connected { .. });
+                        ts.connected = connected;
                     }
-                    let ui_state = vpn_state_to_ui(&state);
-                    connection_screen.borrow_mut().set_state(ui_state);
+                    if let Some(ref guard) = tray_guard {
+                        guard.notify_state(connected);
+                    }
+                    if let VpnState::WaitingSaml { ref saml_url } = state {
+                        if !saml_url.is_empty() {
+                            log_view.append_line("saml: opening browser for authentication…");
+                            if let Err(e) = std::process::Command::new("gio")
+                                .args(["open", saml_url])
+                                .spawn()
+                            {
+                                eprintln!("saml: gio open failed: {e}");
+                                log_view.append_line(&format!("saml: could not open browser: {e}"));
+                            }
+                        }
+                    }
+                    let ui_state = vpn_state_to_ui(state);
+                    connection_screen.borrow_mut().set_state(ui_state, profile_path.clone());
                 }
                 VpnEvent::LogLine(line) => {
                     log_view.append_line(&line);

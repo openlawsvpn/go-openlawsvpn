@@ -1,0 +1,21 @@
+// Allow openlawsvpn-daemon to configure per-interface DNS via systemd-resolved
+// without requiring a polkit authentication prompt.
+//
+// The daemon runs as the logged-in user (via AmbientCapabilities in the
+// systemd user unit) and needs to call org.freedesktop.resolve1 SetLinkDNS,
+// SetLinkDomains, and RevertLink on the TUN interface it owns.
+//
+// Granting these only to active sessions (is_active==true) matches the
+// same policy NetworkManager uses for its own DNS management.
+
+polkit.addRule(function(action, subject) {
+    var dns_actions = [
+        "org.freedesktop.resolve1.set-dns-servers",
+        "org.freedesktop.resolve1.set-domains",
+        "org.freedesktop.resolve1.set-default-route",
+        "org.freedesktop.resolve1.revert",
+    ];
+    if (dns_actions.indexOf(action.id) >= 0 && subject.active) {
+        return polkit.Result.YES;
+    }
+});

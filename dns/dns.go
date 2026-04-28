@@ -220,8 +220,9 @@ func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
 	if _, err := exec.LookPath("resolvectl"); err == nil {
 		if err := ApplyResolved(cfg, ifName); err == nil {
 			return BackendResolved, nil
+		} else {
+			fmt.Fprintf(os.Stderr, "dns: resolvectl failed (%v), falling back to /etc/resolv.conf\n", err)
 		}
-		// Fall through to resolv.conf on any resolvectl error.
 	}
 	if backupPath != "" {
 		if err := BackupResolvConf(backupPath); err != nil {

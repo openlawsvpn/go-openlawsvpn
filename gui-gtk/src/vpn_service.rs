@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
 // VPN service layer — talks to openlawsvpn-daemon over D-Bus (zbus).
-// The public types (VpnEvent, VpnState, VpnCommand) and VpnService API
-// are unchanged; only the transport changes from C FFI to D-Bus.
 
 use futures_channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures_util::StreamExt as _;
@@ -12,7 +10,8 @@ use zbus::{proxy, Connection};
 
 #[derive(Debug, Clone)]
 pub enum VpnEvent {
-    StateChanged(VpnState),
+    /// State changed; profile_path is non-empty when daemon has an active connection.
+    StateChanged { state: VpnState, profile_path: String },
     LogLine(String),
     StatsUpdate { bytes_sent: u64, bytes_recv: u64, uptime_secs: u64 },
 }
@@ -32,6 +31,7 @@ pub enum VpnState {
 pub enum VpnCommand {
     Connect { config_path: String },
     Disconnect,
+    QueryStatus,
 }
 
 // ── D-Bus proxy ───────────────────────────────────────────────────────────────
@@ -42,17 +42,20 @@ pub enum VpnCommand {
     default_path = "/com/openlawsvpn/Daemon"
 )]
 trait VpnDaemon {
+    #[zbus(name = "Connect")]
     fn connect(&self, profile_path: &str) -> zbus::Result<()>;
+    #[zbus(name = "Disconnect")]
     fn disconnect(&self) -> zbus::Result<()>;
-    fn status(&self) -> zbus::Result<(String, String, String)>;
+    #[zbus(name = "Status")]
+    fn status(&self) -> zbus::Result<(String, String, String, String)>;
 
-    #[zbus(signal)]
+    #[zbus(signal, name = "StateChanged")]
     fn state_changed(&self, state: &str, server_ip: &str, assigned_ip: &str) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "LogLine")]
     fn log_line(&self, line: &str) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "StatsUpdate")]
     fn stats_update(&self, bytes_sent: u64, bytes_recv: u64, uptime_secs: u64) -> zbus::Result<()>;
-    #[zbus(signal)]
+    #[zbus(signal, name = "SAMLRequired")]
     fn saml_required(&self, url: &str) -> zbus::Result<()>;
 }
 
@@ -109,108 +112,154 @@ fn service_thread(
         let dbus_conn = match Connection::session().await {
             Ok(c) => c,
             Err(e) => {
-                emit(&event_tx, VpnEvent::StateChanged(VpnState::Error(
+                emit_state(&event_tx, VpnState::Error(
                     format!("Cannot connect to session bus: {e}"),
-                )));
+                ), String::new());
                 return;
             }
         };
 
+        // Query daemon state immediately so the GUI reflects any active connection.
+        handle_query_status(&dbus_conn, &event_tx).await;
+
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 VpnCommand::Connect { config_path } => {
-                    handle_connect(&dbus_conn, &event_tx, config_path).await;
+                    // Pass cmd_rx into handle_connect so it can receive
+                    // Disconnect while the signal loop is running.
+                    handle_connect(&dbus_conn, &event_tx, config_path, &mut cmd_rx).await;
                 }
                 VpnCommand::Disconnect => {
-                    handle_disconnect(&dbus_conn, &event_tx).await;
+                    // Disconnect while not in handle_connect — daemon is probably
+                    // already idle, but call it anyway and reset state.
+                    let proxy = VpnDaemonProxy::new(&dbus_conn).await;
+                    if let Ok(p) = proxy {
+                        let _ = p.disconnect().await;
+                    }
+                    emit_state(&event_tx, VpnState::Idle, String::new());
+                }
+                VpnCommand::QueryStatus => {
+                    handle_query_status(&dbus_conn, &event_tx).await;
                 }
             }
         }
     });
 }
 
+async fn handle_query_status(dbus_conn: &Connection, event_tx: &UnboundedSender<VpnEvent>) {
+    let proxy = match VpnDaemonProxy::new(dbus_conn).await {
+        Ok(p) => p,
+        Err(_) => {
+            emit_state(event_tx, VpnState::Idle, String::new());
+            return;
+        }
+    };
+    match proxy.status().await {
+        Ok((state_str, server_ip, assigned_ip, profile_path)) => {
+            let state = parse_state(&state_str, &server_ip, &assigned_ip);
+            emit_state(event_tx, state, profile_path);
+        }
+        Err(_) => {
+            emit_state(event_tx, VpnState::Idle, String::new());
+        }
+    }
+}
+
 async fn handle_connect(
     dbus_conn: &Connection,
     event_tx: &UnboundedSender<VpnEvent>,
     config_path: String,
+    cmd_rx: &mut tokio::sync::mpsc::Receiver<VpnCommand>,
 ) {
     let proxy = match VpnDaemonProxy::new(dbus_conn).await {
         Ok(p) => p,
         Err(e) => {
-            emit(event_tx, VpnEvent::StateChanged(VpnState::Error(
+            emit_state(event_tx, VpnState::Error(
                 format!("D-Bus proxy: {e} — is openlawsvpn-daemon running?"),
-            )));
+            ), String::new());
             return;
         }
     };
 
     let mut state_stream = match proxy.receive_state_changed().await {
         Ok(s) => s,
-        Err(e) => { emit(event_tx, VpnEvent::StateChanged(VpnState::Error(format!("subscribe StateChanged: {e}")))); return; }
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe StateChanged: {e}")), String::new()); return; }
     };
     let mut log_stream = match proxy.receive_log_line().await {
         Ok(s) => s,
-        Err(e) => { emit(event_tx, VpnEvent::StateChanged(VpnState::Error(format!("subscribe LogLine: {e}")))); return; }
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe LogLine: {e}")), String::new()); return; }
     };
     let mut stats_stream = match proxy.receive_stats_update().await {
         Ok(s) => s,
-        Err(e) => { emit(event_tx, VpnEvent::StateChanged(VpnState::Error(format!("subscribe StatsUpdate: {e}")))); return; }
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe StatsUpdate: {e}")), String::new()); return; }
     };
     let mut saml_stream = match proxy.receive_saml_required().await {
         Ok(s) => s,
-        Err(e) => { emit(event_tx, VpnEvent::StateChanged(VpnState::Error(format!("subscribe SAMLRequired: {e}")))); return; }
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe SAMLRequired: {e}")), String::new()); return; }
     };
 
     if let Err(e) = proxy.connect(&config_path).await {
-        emit(event_tx, VpnEvent::StateChanged(VpnState::Error(format!("daemon Connect: {e}"))));
+        emit_state(event_tx, VpnState::Error(format!("daemon Connect: {e}")), String::new());
         return;
     }
 
     loop {
         tokio::select! {
+            // Incoming command — only Disconnect is handled here; Connect/QueryStatus
+            // are deferred until after this connection ends.
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(VpnCommand::Disconnect) => {
+                        emit_state(event_tx, VpnState::Disconnecting, String::new());
+                        if let Err(e) = proxy.disconnect().await {
+                            event_tx.unbounded_send(VpnEvent::LogLine(
+                                format!("daemon Disconnect: {e}")
+                            )).ok();
+                        }
+                        emit_state(event_tx, VpnState::Idle, String::new());
+                        return;
+                    }
+                    Some(other) => {
+                        // Re-queue: put it back by processing after this loop exits.
+                        // Since we can't un-recv, just drop non-Disconnect commands
+                        // while a connection is active (Connect while connected is
+                        // already blocked in the UI).
+                        drop(other);
+                    }
+                    None => return,
+                }
+            }
             Some(sig) = state_stream.next() => {
                 if let Ok(args) = sig.args() {
                     let state = parse_state(args.state, args.server_ip, args.assigned_ip);
                     let terminal = matches!(state, VpnState::Idle | VpnState::Error(_));
-                    emit(event_tx, VpnEvent::StateChanged(state));
+                    emit_state(event_tx, state, config_path.clone());
                     if terminal { return; }
                 }
             }
             Some(sig) = log_stream.next() => {
                 if let Ok(args) = sig.args() {
-                    emit(event_tx, VpnEvent::LogLine(args.line.to_string()));
+                    event_tx.unbounded_send(VpnEvent::LogLine(args.line.to_string())).ok();
                 }
             }
             Some(sig) = stats_stream.next() => {
                 if let Ok(args) = sig.args() {
-                    emit(event_tx, VpnEvent::StatsUpdate {
+                    event_tx.unbounded_send(VpnEvent::StatsUpdate {
                         bytes_sent: args.bytes_sent,
                         bytes_recv: args.bytes_recv,
                         uptime_secs: args.uptime_secs,
-                    });
+                    }).ok();
                 }
             }
             Some(sig) = saml_stream.next() => {
                 if let Ok(args) = sig.args() {
-                    std::process::Command::new("xdg-open").arg(args.url).spawn().ok();
-                    emit(event_tx, VpnEvent::StateChanged(VpnState::WaitingSaml {
+                    emit_state(event_tx, VpnState::WaitingSaml {
                         saml_url: args.url.to_string(),
-                    }));
+                    }, config_path.clone());
                 }
             }
             else => break,
         }
-    }
-}
-
-async fn handle_disconnect(dbus_conn: &Connection, event_tx: &UnboundedSender<VpnEvent>) {
-    let proxy = match VpnDaemonProxy::new(dbus_conn).await {
-        Ok(p) => p,
-        Err(e) => { emit(event_tx, VpnEvent::LogLine(format!("D-Bus proxy error: {e}"))); return; }
-    };
-    emit(event_tx, VpnEvent::StateChanged(VpnState::Disconnecting));
-    if let Err(e) = proxy.disconnect().await {
-        emit(event_tx, VpnEvent::LogLine(format!("daemon Disconnect: {e}")));
     }
 }
 
@@ -229,6 +278,6 @@ fn parse_state(state: &str, server_ip: &str, assigned_ip: &str) -> VpnState {
     }
 }
 
-fn emit(tx: &UnboundedSender<VpnEvent>, event: VpnEvent) {
-    tx.unbounded_send(event).ok();
+fn emit_state(tx: &UnboundedSender<VpnEvent>, state: VpnState, profile_path: String) {
+    tx.unbounded_send(VpnEvent::StateChanged { state, profile_path }).ok();
 }

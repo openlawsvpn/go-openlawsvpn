@@ -22,7 +22,7 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon rpm srpm builddep vendor-tarball
+.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon gui gui-release gui-deps rpm srpm builddep vendor-tarball
 
 all: aar
 
@@ -81,6 +81,21 @@ lint:
 daemon:
 	CGO_ENABLED=0 go build -o openlawsvpn-daemon ./cmd/daemon
 
+## Install GTK4/libadwaita build dependencies (Fedora)
+gui-deps:
+	sudo dnf install -y \
+	  gtk4-devel libadwaita-devel dbus-devel \
+	  rust cargo
+
+## Build the GTK4 GUI binary (debug; use gui-release for optimised)
+gui:
+	cd gui-gtk && cargo build
+	cp gui-gtk/target/debug/openlawsvpn-gui .
+
+gui-release:
+	cd gui-gtk && cargo build --release
+	cp gui-gtk/target/release/openlawsvpn-gui .
+
 ## Build source tarballs and RPMs
 ## The Cargo vendor tarball must exist at $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz
 ## Run 'make vendor-tarball' first if it does not.
@@ -115,5 +130,5 @@ builddep: srpm
 
 ## Remove build artefacts
 clean:
-	rm -f go-openvpn3.aar go-openvpn3.aar.sha256 go-openvpn3-sources.jar ovpn3 relay-server openlawsvpn-daemon
-	rm -rf rpmbuild
+	rm -f go-openvpn3.aar go-openvpn3.aar.sha256 go-openvpn3-sources.jar ovpn3 relay-server openlawsvpn-daemon openlawsvpn-gui
+	rm -rf rpmbuild gui-gtk/target

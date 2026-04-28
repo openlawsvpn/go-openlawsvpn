@@ -7,13 +7,31 @@ Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 
 ## Status
 
-Working end-to-end on Linux (CLI). Android gomobile API complete; `.aar` build
+Working end-to-end on Linux (CLI + GTK4 GUI). Android gomobile API complete; `.aar` build
 pipeline in `.github/workflows/aar.yml`.
+
+### Components
+
+| Component | Description |
+|---|---|
+| `cmd/daemon` | `openlawsvpn-daemon` — D-Bus session service; manages the VPN tunnel with CAP\_NET\_ADMIN (no root) |
+| `cmd/ovpn3` | CLI client with SAML flow and reconnect loop |
+| `gui-gtk/` | GTK4 + libadwaita desktop GUI; communicates with the daemon over D-Bus |
 
 ## Build
 
 ```bash
-# Linux CLI
+# Daemon
+CGO_ENABLED=0 go build -o openlawsvpn-daemon ./cmd/daemon
+# Grant CAP_NET_ADMIN so the daemon can open TUN devices without root:
+sudo setcap cap_net_admin+eip ./openlawsvpn-daemon
+./openlawsvpn-daemon &
+
+# GTK4 GUI (requires gtk4-devel, libadwaita-devel, dbus-devel)
+cd gui-gtk && cargo build --release
+./target/release/openlawsvpn-gui
+
+# Linux CLI (direct, no daemon)
 CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
 sudo ./ovpn3 -config your.ovpn
 
@@ -21,6 +39,36 @@ sudo ./ovpn3 -config your.ovpn
 gomobile bind -o go-openvpn3.aar -target android -androidapi 31 \
     github.com/openlawsvpn/go-openvpn3
 ```
+
+### RPM packages (Fedora / RHEL)
+
+```bash
+make srpm    # builds openlawsvpn-*.src.rpm
+make rpm     # builds binary RPMs via mock
+```
+
+Produces three sub-packages: `openlawsvpn-daemon`, `openlawsvpn-gui`, and
+`openlawsvpn` (meta).
+
+### Daemon D-Bus interface
+
+The daemon exposes `com.openlawsvpn.Daemon` on the **session** bus:
+
+| Method / Signal | Signature | Description |
+|---|---|---|
+| `Connect(path)` | `(s)` | Start VPN using the given `.ovpn` config |
+| `Disconnect()` | `()` | Tear down the active tunnel |
+| `Status()` | `→ (s,s,s,s)` | state, server\_ip, assigned\_ip, profile\_path |
+| `StateChanged` | `(s,s,s)` | state, server\_ip, assigned\_ip |
+| `LogLine` | `(s)` | Log message |
+| `StatsUpdate` | `(t,t,t)` | bytes\_sent, bytes\_recv, uptime\_secs |
+| `SAMLRequired` | `(s)` | SAML browser URL |
+
+### DNS / polkit
+
+The daemon sets per-interface DNS via `systemd-resolved`. The polkit rule in
+`packaging/10-openlawsvpn-dns.rules` grants the daemon permission to call
+`org.freedesktop.resolve1` methods without a password prompt.
 
 ## Test
 

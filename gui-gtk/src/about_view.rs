@@ -26,7 +26,7 @@ impl AboutView {
         version_label.set_css_classes(&["dim-label"]);
 
         let desc_label = Label::new(Some(
-            "OpenVPN 3 client with SAML/SSO support\nfor enterprise and cloud VPN access.",
+            "AWS Client VPN with SAML/SSO support.\nPure Go engine — no C++ runtime.",
         ));
         desc_label.set_justify(gtk4::Justification::Center);
         desc_label.set_wrap(true);
@@ -44,31 +44,28 @@ impl AboutView {
             let dialog = AboutDialog::new();
             dialog.set_application_name("openlawsvpn");
             dialog.set_version(env!("CARGO_PKG_VERSION"));
-            dialog.set_comments("OpenVPN 3 client with SAML/SSO support.");
-            dialog.set_website("https://github.com/openlawsvpn/openlawsvpn");
+            dialog.set_comments(
+                "AWS Client VPN client with SAML/SSO support.\n\
+                 Pure Go protocol engine — no C++ runtime required.",
+            );
+            dialog.set_website("https://github.com/openlawsvpn/go-openvpn3");
             dialog.set_license_type(gtk4::License::Lgpl21);
             dialog.set_developers(&["openlawsvpn contributors"]);
             dialog.add_legal_section(
-                "openvpn3-core",
-                Some("AGPL-3.0-or-later — https://github.com/OpenVPN/openvpn3"),
+                "go-openvpn3",
+                Some("BSL-1.1 — https://github.com/openlawsvpn/go-openvpn3"),
                 gtk4::License::Custom,
                 None,
             );
             dialog.add_legal_section(
-                "ASIO",
-                Some("Boost Software License 1.0 — https://github.com/chriskohlhoff/asio"),
+                "zbus",
+                Some("MIT — https://github.com/dbus2/zbus"),
                 gtk4::License::Custom,
                 None,
             );
             dialog.add_legal_section(
-                "OpenSSL",
-                Some("Apache License 2.0 — https://github.com/openssl/openssl"),
-                gtk4::License::Custom,
-                None,
-            );
-            dialog.add_legal_section(
-                "LZ4",
-                Some("BSD 2-Clause — https://github.com/lz4/lz4"),
+                "GTK4 / libadwaita",
+                Some("LGPL-2.1 — https://gtk.org"),
                 gtk4::License::Custom,
                 None,
             );
