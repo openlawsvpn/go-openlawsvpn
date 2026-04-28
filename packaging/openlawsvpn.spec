@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 License:        BSL-1.1
@@ -99,7 +99,7 @@ EOF
 
 %files daemon
 %license LICENSE
-%{_libexecdir}/openlawsvpn-daemon
+%caps(cap_net_admin=eip) %{_libexecdir}/openlawsvpn-daemon
 %{_userunitdir}/openlawsvpn-daemon.service
 %{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 %{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
@@ -122,6 +122,9 @@ EOF
 # ── Changelog ──────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-2
+- spec: set CAP_NET_ADMIN on daemon via %%caps macro (no manual setcap needed)
+
 * Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
 - gui: system-tray support via StatusNotifierItem D-Bus protocol (appindicatorsupport on GNOME)
 - gui: custom heart SVG icons — red heart (connected), yellow broken heart (disconnected)
