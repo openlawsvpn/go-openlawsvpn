@@ -18,6 +18,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
+ConfigurationDirectory=openlawsvpn
 ReadWritePaths=%h/.config/openlawsvpn
 
 [Install]
