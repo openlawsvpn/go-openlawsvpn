@@ -56,9 +56,6 @@ No OpenVPN Inc runtime required.
 tar -C gui-gtk -xzf %{SOURCE1}
 cd gui-gtk && %cargo_prep -v vendor && cd -
 
-%generate_buildrequires
-cd gui-gtk && %cargo_generate_buildrequires && cd -
-
 # ── Build ──────────────────────────────────────────────────────────────────────
 
 %build
@@ -125,5 +122,5 @@ EOF
 # ── Changelog ──────────────────────────────────────────────────────────────────
 
 %changelog
-* Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
+* Mon Apr 28 2025 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
 - Initial package: Go daemon + GTK4 GUI replacing openvpn3-linux dependency
