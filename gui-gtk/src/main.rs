@@ -65,7 +65,7 @@ fn main() {
 
     app.connect_activate(|app| {
         let provider = CssProvider::new();
-        provider.load_from_string(STYLE);
+        provider.load_from_data(STYLE);
         gtk4::style_context_add_provider_for_display(
             &gtk4::gdk::Display::default().expect("no display"),
             &provider,
