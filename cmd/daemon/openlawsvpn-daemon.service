@@ -15,6 +15,10 @@ CapabilityBoundingSet=CAP_NET_ADMIN
 
 # Hardening — drop everything else.
 NoNewPrivileges=true
+# PrivateUsers=no is explicit: with PrivateUsers=yes (systemd default for user services
+# on some distros) the daemon runs in a child user namespace where CAP_NET_ADMIN is
+# scoped to that namespace, not the host net namespace — TUNSETIFF fails with EPERM.
+PrivateUsers=no
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only

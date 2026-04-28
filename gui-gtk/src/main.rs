@@ -123,9 +123,7 @@ fn build_ui(app: &Application) {
         .build();
 
     // ── System tray ─────────────────────────────────────────────────────────
-    let tray_state = Arc::new(Mutex::new(TrayState {
-        connected: false,
-    }));
+    let tray_state = Arc::new(Mutex::new(TrayState::default()));
 
     let tray_guard: Option<tray::TrayGuard> = tray::register(
         window.clone(),
@@ -134,34 +132,35 @@ fn build_ui(app: &Application) {
         &vpn.rt_handle,
     );
 
-    // X button (close): always exit the app.
-    // D-Bus well-known name disappears automatically when the process exits,
-    // so gnome-shell removes the tray icon without needing explicit cleanup.
+    // X button / Alt+F4: always exit the app.
     window.connect_close_request(move |_w| {
         std::process::exit(0);
     });
 
-    // _ (minimize) button: hide to tray instead of minimizing, when tray is active.
-    // Surface isn't available until the window is realized; hook into connect_realize
-    // (fires once) to attach the Toplevel state-change listener.
+    // _ (minimize) button: hide to tray instead of minimizing when tray is active.
+    // On Wayland the compositor never reports ToplevelState::MINIMIZED back to the
+    // client, so listening for state_notify doesn't work. Instead we replace the
+    // default CSD window controls with our own buttons that call set_visible(false).
     if tray_guard.is_some() {
-        use gtk4::gdk::prelude::ToplevelExt;
-        let window_weak = window.downgrade();
-        window.connect_realize(move |w| {
-            if let Some(surface) = w.surface() {
-                if let Ok(toplevel) = surface.downcast::<gtk4::gdk::Toplevel>() {
-                    let win = window_weak.clone();
-                    toplevel.connect_state_notify(move |tl| {
-                        use gtk4::gdk::ToplevelState;
-                        if tl.state().contains(ToplevelState::MINIMIZED) {
-                            if let Some(w) = win.upgrade() {
-                                w.set_visible(false);
-                            }
-                        }
-                    });
-                }
+        header.set_show_end_title_buttons(false);
+
+        let close_btn = gtk4::Button::from_icon_name("window-close-symbolic");
+        close_btn.add_css_class("flat");
+        close_btn.connect_clicked(|_| std::process::exit(0));
+
+        let minimize_btn = gtk4::Button::from_icon_name("window-minimize-symbolic");
+        minimize_btn.add_css_class("flat");
+        let win_weak = window.downgrade();
+        minimize_btn.connect_clicked(move |_| {
+            if let Some(w) = win_weak.upgrade() {
+                w.set_visible(false);
             }
         });
+
+        // pack_end items are ordered right-to-left: close first = far right,
+        // minimize second = just left of close → standard [_ ×] layout.
+        header.pack_end(&close_btn);
+        header.pack_end(&minimize_btn);
     }
 
     // ── VPN event loop ───────────────────────────────────────────────────────
@@ -174,6 +173,9 @@ fn build_ui(app: &Application) {
                     let connected = matches!(state, VpnState::Connected { .. });
                     if let Ok(mut ts) = tray_state.lock() {
                         ts.connected = connected;
+                        if !profile_path.is_empty() {
+                            ts.last_profile_path = profile_path.clone();
+                        }
                     }
                     if let Some(ref guard) = tray_guard {
                         guard.notify_state(connected);
@@ -183,6 +185,8 @@ fn build_ui(app: &Application) {
                             log_view.append_line("saml: opening browser for authentication…");
                             if let Err(e) = std::process::Command::new("gio")
                                 .args(["open", saml_url])
+                                .stdout(std::process::Stdio::null())
+                                .stderr(std::process::Stdio::null())
                                 .spawn()
                             {
                                 eprintln!("saml: gio open failed: {e}");

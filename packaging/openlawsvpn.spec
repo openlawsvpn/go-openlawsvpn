@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        8%{?dist}
+Release:        9%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -138,6 +138,12 @@ cd gui-gtk && %cargo_test && cd -
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Apr 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-9
+- daemon: add PrivateUsers=no to service unit
+  systemd may auto-enable PrivateUsers for user services, placing the daemon in a
+  child user namespace where CAP_NET_ADMIN is scoped to that namespace and cannot
+  create TUN devices in the host network namespace (TUNSETIFF → EPERM)
+
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-8
 - spec: rewrite per Fedora Rust Packaging Guidelines
 - add %%bcond check 0 (mandatory for Rust packages)

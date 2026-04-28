@@ -22,6 +22,8 @@ const ICON_DISCONNECTED_SVG: &[u8] = include_bytes!("../resources/icons/vpn-disc
 #[derive(Clone, Default)]
 pub struct TrayState {
     pub connected: bool,
+    /// Config path of the last successfully started connection; used by tray "Connect VPN".
+    pub last_profile_path: String,
 }
 
 /// Commands the D-Bus task sends back to the GTK main thread.
@@ -355,14 +357,22 @@ pub fn register(
         let window_ref = window.clone();
         let conn_slot = conn_slot.clone();
         let vpn_tx = vpn_cmd_tx.clone();
+        let state = state.clone();
         glib::idle_add_local(move || {
             while let Ok(cmd) = cmd_rx.lock().unwrap().try_recv() {
                 match cmd {
                     TrayCmd::ShowWindow => { window_ref.present(); }
                     TrayCmd::VpnConnect => {
-                        // We don't know which profile to connect to from the tray alone;
-                        // show the window so the user can pick. TODO: connect to last profile.
-                        window_ref.present();
+                        let path = state.lock().map(|s| s.last_profile_path.clone()).unwrap_or_default();
+                        if path.is_empty() {
+                            // No prior connection — show window so the user can pick a profile.
+                            window_ref.present();
+                        } else {
+                            let tx = vpn_tx.clone();
+                            glib::spawn_future_local(async move {
+                                tx.send(crate::vpn_service::VpnCommand::Connect { config_path: path }).await.ok();
+                            });
+                        }
                     }
                     TrayCmd::VpnDisconnect => {
                         let tx = vpn_tx.clone();
