@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 License:        BSL-1.1
@@ -69,6 +69,9 @@ install -Dm644 packaging/10-openlawsvpn-dns.rules \
 install -Dm644 packaging/com.openlawsvpn.Daemon.service \
     %{buildroot}%{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 
+install -Dm644 packaging/10-openlawsvpn-caps.conf \
+    %{buildroot}%{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
+
 cd gui-gtk && %cargo_install && cd -
 
 install -Dm644 packaging/openlawsvpn-gui.desktop \
@@ -80,21 +83,30 @@ install -Dm644 packaging/openlawsvpn-gui.desktop \
 %{_userunitdir}/openlawsvpn-daemon.service
 %{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 %{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
+%{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
 
 %files gui
 %{_bindir}/openlawsvpn-gui
 %{_datadir}/applications/openlawsvpn-gui.desktop
 
 %post daemon
+# Reload system daemon so the user@.service.d drop-in is picked up
+# before the first user session starts the daemon.
+%systemd_post user@.service
 %systemd_user_post openlawsvpn-daemon.service
 
 %preun daemon
 %systemd_user_preun openlawsvpn-daemon.service
 
 %postun daemon
+%systemd_postun user@.service
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
 %changelog
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-4
+- daemon: add user@.service.d drop-in to grant CAP_NET_ADMIN to user manager
+  so AmbientCapabilities in the user unit is actually propagated
+
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-3
 - spec: extract inline D-Bus service and .desktop files to packaging/ source files
 
