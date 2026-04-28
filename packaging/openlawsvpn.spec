@@ -122,10 +122,10 @@ EOF
 # ── Changelog ──────────────────────────────────────────────────────────────────
 
 %changelog
-* Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-2
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-2
 - spec: set CAP_NET_ADMIN on daemon via %%caps macro (no manual setcap needed)
 
-* Mon Apr 28 2026 openlawsvpn contributors <security@openlawsvpn.com> - 0.1.0-1
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-1
 - gui: system-tray support via StatusNotifierItem D-Bus protocol (appindicatorsupport on GNOME)
 - gui: custom heart SVG icons — red heart (connected), yellow broken heart (disconnected)
 - gui: tray icon always visible; icon swaps on state change instead of disappearing
