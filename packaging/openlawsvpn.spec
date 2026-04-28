@@ -1,6 +1,4 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-%global goipath    github.com/openlawsvpn/go-openvpn3
-%global extractdir go-openvpn3
 Name:           openlawsvpn
 Version:        0.1.0
 Release:        1%{?dist}
@@ -12,7 +10,6 @@ Source0:        {{{ git_repo_pack }}}
 Source1:        openlawsvpn-vendor.tar.gz
 
 BuildRequires:  golang >= 1.21
-BuildRequires:  go-rpm-macros
 BuildRequires:  cargo-rpm-macros
 BuildRequires:  rust
 BuildRequires:  cargo
@@ -52,15 +49,13 @@ No OpenVPN Inc runtime required.
 
 %prep
 %setup -T -b 0 -q -n go-openvpn3
-%goprep -e %{goipath}
 tar -C gui-gtk -xzf %{SOURCE1}
 cd gui-gtk && %cargo_prep -v vendor && cd -
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
 %build
-export CGO_ENABLED=0
-%gobuild -o %{_builddir}/openlawsvpn-daemon %{goipath}/cmd/daemon
+CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-daemon ./cmd/daemon
 
 cd gui-gtk && %cargo_build && cd -
 
