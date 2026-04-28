@@ -86,9 +86,8 @@ daemon:
 ## Run 'make vendor-tarball' first if it does not.
 srpm: vendor-tarball
 	mkdir -p $(RPM_OUTDIR)/SRPMS
+	cp -f $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz $(RPM_OUTDIR)/SRPMS/
 	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
-	cp -n $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz \
-	    $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' -newer $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz | head -1 | xargs dirname) 2>/dev/null || true
 	@echo "SRPM: $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm')"
 
 vendor-tarball:
@@ -98,9 +97,7 @@ vendor-tarball:
 	  cd gui-gtk && cargo vendor vendor && tar czf $(RPM_OUTDIR)/SOURCES/openlawsvpn-vendor.tar.gz vendor/ && rm -rf vendor; \
 	fi
 
-rpm: vendor-tarball
-	mkdir -p $(RPM_OUTDIR)/SRPMS
-	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
+rpm: srpm
 	rpmbuild --rebuild $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1) \
 	    --define "_topdir $(RPM_OUTDIR)" \
 	    --define "_sourcedir $(RPM_OUTDIR)/SOURCES"
