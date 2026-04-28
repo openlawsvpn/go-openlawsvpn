@@ -7,7 +7,8 @@
 use gtk4::glib;
 use gtk4::prelude::*;
 use libadwaita::ApplicationWindow;
-use zbus::{interface, Connection, SignalContext};
+use zbus::{interface, Connection};
+use zbus::object_server::SignalContext;
 
 use std::sync::{Arc, Mutex, mpsc as stdmpsc};
 

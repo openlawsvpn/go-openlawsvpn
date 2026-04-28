@@ -35,3 +35,5 @@ go.work.sum
 /mockserver
 /cmd/ovpn3/ovpn3
 /rpmbuild
+gui-gtk/Cargo.lock
+gui-gtk/.cargo/
