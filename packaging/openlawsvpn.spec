@@ -1,24 +1,33 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        7%{?dist}
+Release:        8%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
+# Source (daemon + protocol engine): BSL-1.1
+# GUI binary (statically links Rust crates): BSL-1.1 AND MIT AND Apache-2.0 AND BSD-2-Clause AND LGPL-2.1-or-later
+SourceLicense:  BSL-1.1
 License:        BSL-1.1
+
 URL:            https://github.com/openlawsvpn/go-openvpn3
 Source0:        {{{ git_repo_pack }}}
 
+# Tests are not shipped in the source tree — disable check bcond.
+%bcond check 0
+
 BuildRequires:  golang >= 1.21
 BuildRequires:  cargo-rpm-macros
-BuildRequires:  rust
-BuildRequires:  cargo
-BuildRequires:  gtk4-devel
-BuildRequires:  libadwaita-devel
-BuildRequires:  dbus-devel
-BuildRequires:  systemd-rpm-macros
+
+%description
+AWS Client VPN client with full SAML/SSO support.
+Pure Go protocol engine (go-openvpn3) with a GTK4 GUI.
+No OpenVPN Inc runtime required.
+
+# ── Subpackages ───────────────────────────────────────────────────────────────
 
 %package daemon
 Summary:        openlawsvpn VPN daemon (D-Bus session service)
+License:        BSL-1.1
 Requires:       dbus
 Requires:       polkit
 %{?systemd_requires}
@@ -30,6 +39,9 @@ Exposes com.openlawsvpn.Daemon on the session bus.
 
 %package gui
 Summary:        openlawsvpn GTK4 GUI
+# GUI binary statically links Rust crates — full license conjunction required.
+# (paste output of %%cargo_license_summary after first build)
+License:        BSL-1.1 AND MIT AND Apache-2.0 AND BSD-2-Clause AND LGPL-2.1-or-later
 Requires:       openlawsvpn-daemon = %{version}-%{release}
 Requires:       gtk4
 Requires:       libadwaita
@@ -40,22 +52,30 @@ GTK4 + libadwaita desktop client for openlawsvpn.
 Communicates with openlawsvpn-daemon via D-Bus.
 Includes system-tray support via StatusNotifierItem.
 
-%description
-AWS Client VPN client with full SAML/SSO support.
-Pure Go protocol engine (go-openvpn3) with a GTK4 GUI.
-No OpenVPN Inc runtime required.
+# ── Prep ──────────────────────────────────────────────────────────────────────
 
 %prep
 %setup -T -b 0 -q -n go-openvpn3
 cd gui-gtk && %cargo_prep && cd -
 
+# ── Dynamic BuildRequires ─────────────────────────────────────────────────────
+
 %generate_buildrequires
 cd gui-gtk && %cargo_generate_buildrequires && cd -
+
+# ── Build ─────────────────────────────────────────────────────────────────────
 
 %build
 CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-daemon ./cmd/daemon
 
-cd gui-gtk && %cargo_build && cd -
+cd gui-gtk
+%cargo_build
+# Generate license breakdown for statically linked crates (required by guidelines).
+%{cargo_license_summary}
+%{cargo_license} > LICENSE.dependencies
+cd -
+
+# ── Install ───────────────────────────────────────────────────────────────────
 
 %install
 install -Dm755 %{_builddir}/openlawsvpn-daemon \
@@ -73,10 +93,21 @@ install -Dm644 packaging/com.openlawsvpn.Daemon.service \
 install -Dm644 packaging/10-openlawsvpn-caps.conf \
     %{buildroot}%{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
 
-cd gui-gtk && %cargo_install && cd -
+# Install GUI binary directly from target/rpm/ (non-crate project — do not use %%cargo_install).
+install -Dm755 gui-gtk/target/rpm/openlawsvpn-gui \
+    %{buildroot}%{_bindir}/openlawsvpn-gui
 
 install -Dm644 packaging/openlawsvpn-gui.desktop \
     %{buildroot}%{_datadir}/applications/openlawsvpn-gui.desktop
+
+# ── Check ─────────────────────────────────────────────────────────────────────
+
+%if %{with check}
+%check
+cd gui-gtk && %cargo_test && cd -
+%endif
+
+# ── Files ─────────────────────────────────────────────────────────────────────
 
 %files daemon
 %license LICENSE
@@ -87,12 +118,13 @@ install -Dm644 packaging/openlawsvpn-gui.desktop \
 %{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
 
 %files gui
+%license gui-gtk/LICENSE.dependencies
 %{_bindir}/openlawsvpn-gui
 %{_datadir}/applications/openlawsvpn-gui.desktop
 
+# ── Scriptlets ────────────────────────────────────────────────────────────────
+
 %post daemon
-# Reload system daemon so the user@.service.d drop-in is picked up
-# before the first user session starts the daemon.
 %systemd_post user@.service
 %systemd_user_post openlawsvpn-daemon.service
 
@@ -103,15 +135,19 @@ install -Dm644 packaging/openlawsvpn-gui.desktop \
 %systemd_postun user@.service
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
+# ── Changelog ─────────────────────────────────────────────────────────────────
+
 %changelog
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-8
+- spec: rewrite per Fedora Rust Packaging Guidelines
+- add %%bcond check 0 (mandatory for Rust packages)
+- add %%cargo_license_summary / %%cargo_license > LICENSE.dependencies in %%build
+- add License conjunction for gui subpackage (BSL-1.1 AND MIT AND Apache-2.0 AND BSD-2-Clause AND LGPL-2.1-or-later)
+- replace %%cargo_install with explicit install from target/rpm/ (non-crate project rule)
+- add SourceLicense tag separating source from binary license
+
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-7
 - spec: drop vendor tarball; use %%cargo_generate_buildrequires (all crates packaged in Fedora)
-
-* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-6
-- spec: revert to vendor tarball; gtk4/libadwaita/zbus crates not packaged in Fedora (incorrect)
-
-* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-5
-- spec: drop vendor tarball; use %%cargo_generate_buildrequires with Fedora packaged crates (reverted)
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-4
 - daemon: add user@.service.d drop-in to grant CAP_NET_ADMIN to user manager
