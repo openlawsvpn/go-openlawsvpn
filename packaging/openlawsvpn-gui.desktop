@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=openlawsvpn
+Comment=AWS Client VPN
+Exec=openlawsvpn-gui
+Icon=network-vpn
+Terminal=false
+Type=Application
+Categories=Network;
+Keywords=vpn;aws;saml;

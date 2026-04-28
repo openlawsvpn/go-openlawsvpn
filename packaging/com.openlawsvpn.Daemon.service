@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.openlawsvpn.Daemon
+Exec=/usr/libexec/openlawsvpn-daemon
+SystemdService=openlawsvpn-daemon.service

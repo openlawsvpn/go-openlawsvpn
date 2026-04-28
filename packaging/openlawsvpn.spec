@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 License:        BSL-1.1
@@ -46,21 +46,15 @@ AWS Client VPN client with full SAML/SSO support.
 Pure Go protocol engine (go-openvpn3) with a GTK4 GUI.
 No OpenVPN Inc runtime required.
 
-# ── Prep ──────────────────────────────────────────────────────────────────────
-
 %prep
 %setup -T -b 0 -q -n go-openvpn3
 tar -C gui-gtk -xzf %{SOURCE1}
 cd gui-gtk && %cargo_prep -v vendor && cd -
 
-# ── Build ──────────────────────────────────────────────────────────────────────
-
 %build
 CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-daemon ./cmd/daemon
 
 cd gui-gtk && %cargo_build && cd -
-
-# ── Install ────────────────────────────────────────────────────────────────────
 
 %install
 install -Dm755 %{_builddir}/openlawsvpn-daemon \
@@ -72,30 +66,13 @@ install -Dm644 cmd/daemon/openlawsvpn-daemon.service \
 install -Dm644 packaging/10-openlawsvpn-dns.rules \
     %{buildroot}%{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
 
-mkdir -p %{buildroot}%{_datadir}/dbus-1/services
-cat > %{buildroot}%{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service << 'EOF'
-[D-BUS Service]
-Name=com.openlawsvpn.Daemon
-Exec=%{_libexecdir}/openlawsvpn-daemon
-SystemdService=openlawsvpn-daemon.service
-EOF
+install -Dm644 packaging/com.openlawsvpn.Daemon.service \
+    %{buildroot}%{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 
 cd gui-gtk && %cargo_install && cd -
 
-mkdir -p %{buildroot}%{_datadir}/applications
-cat > %{buildroot}%{_datadir}/applications/openlawsvpn-gui.desktop << 'EOF'
-[Desktop Entry]
-Name=openlawsvpn
-Comment=AWS Client VPN
-Exec=openlawsvpn-gui
-Icon=network-vpn
-Terminal=false
-Type=Application
-Categories=Network;
-Keywords=vpn;aws;saml;
-EOF
-
-# ── Files ──────────────────────────────────────────────────────────────────────
+install -Dm644 packaging/openlawsvpn-gui.desktop \
+    %{buildroot}%{_datadir}/applications/openlawsvpn-gui.desktop
 
 %files daemon
 %license LICENSE
@@ -108,8 +85,6 @@ EOF
 %{_bindir}/openlawsvpn-gui
 %{_datadir}/applications/openlawsvpn-gui.desktop
 
-# ── Scriptlets ─────────────────────────────────────────────────────────────────
-
 %post daemon
 %systemd_user_post openlawsvpn-daemon.service
 
@@ -119,13 +94,12 @@ EOF
 %postun daemon
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
-# ── Changelog ──────────────────────────────────────────────────────────────────
-
 %changelog
+* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-3
+- spec: extract inline D-Bus service and .desktop files to packaging/ source files
+
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-2
 - spec: set CAP_NET_ADMIN on daemon via %%caps macro (no manual setcap needed)
-
-* Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-1
 - gui: system-tray support via StatusNotifierItem D-Bus protocol (appindicatorsupport on GNOME)
 - gui: custom heart SVG icons — red heart (connected), yellow broken heart (disconnected)
 - gui: tray icon always visible; icon swaps on state change instead of disappearing
