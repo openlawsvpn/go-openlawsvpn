@@ -2,10 +2,10 @@
 
 // Package main implements the openlawsvpn D-Bus daemon.
 //
-// It exposes the com.openlawsvpn.Daemon interface on the session bus so that
+// It exposes the com.openlawsvpn.Daemon interface on the system bus so that
 // the GTK GUI (or any other client) can control VPN connections without
 // requiring root — privilege is held by this process via CAP_NET_ADMIN set in
-// the systemd user unit.
+// the systemd system unit.
 package main
 
 import (

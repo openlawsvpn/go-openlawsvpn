@@ -111,11 +111,11 @@ fn service_thread(
     handle_tx.send(rt.handle().clone()).ok();
 
     rt.block_on(async move {
-        let dbus_conn = match Connection::session().await {
+        let dbus_conn = match Connection::system().await {
             Ok(c) => c,
             Err(e) => {
                 emit_state(&event_tx, VpnState::Error(
-                    format!("Cannot connect to session bus: {e}"),
+                    format!("Cannot connect to system bus: {e}"),
                 ), String::new());
                 return;
             }

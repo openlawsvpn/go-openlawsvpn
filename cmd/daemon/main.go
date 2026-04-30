@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
-// Command openlawsvpn-daemon is a D-Bus session service that manages VPN
+// Command openlawsvpn-daemon is a D-Bus system service that manages VPN
 // connections on behalf of the openlawsvpn GTK GUI.
 //
-// It exposes com.openlawsvpn.Daemon on the session bus, holds CAP_NET_ADMIN
+// It exposes com.openlawsvpn.Daemon on the system bus, holds CAP_NET_ADMIN
 // so that TUN creation and routing succeed without running as root, and runs
 // the SAML ACS server on port 35001.
 //
-// Intended to run as a systemd user service:
+// Intended to run as a systemd system service:
 //
-//	systemctl --user enable --now openlawsvpn-daemon
+//	sudo systemctl enable --now openlawsvpn-daemon
 //
 // The GUI calls Connect(profile_path) and subscribes to StateChanged, LogLine,
 // StatsUpdate, and SAMLRequired signals. It never needs elevated privilege.
@@ -65,9 +65,9 @@ func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	log.SetPrefix("daemon: ")
 
-	conn, err := dbus.ConnectSessionBus()
+	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "daemon: connect session bus: %v\n", err)
+		fmt.Fprintf(os.Stderr, "daemon: connect system bus: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -90,7 +90,7 @@ func main() {
 		"org.freedesktop.DBus.Introspectable",
 	)
 
-	fmt.Fprintf(os.Stderr, "daemon: serving %s on session bus\n", dbusServiceName)
+	fmt.Fprintf(os.Stderr, "daemon: serving %s on system bus\n", dbusServiceName)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)

@@ -1,0 +1,33 @@
+[Unit]
+Description=openlawsvpn VPN daemon
+Documentation=https://openlawsvpn.com
+After=network.target dbus.service
+
+[Service]
+Type=simple
+User=openlawsvpn
+Group=openlawsvpn
+ExecStart=/usr/libexec/openlawsvpn-daemon
+Restart=on-failure
+RestartSec=3
+
+# CAP_NET_ADMIN is required to create and configure TUN devices.
+# Running as a system service in the host user namespace means file capabilities
+# (cap_net_admin=eip set by the RPM %%caps macro) work correctly.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+# Hardening.
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target
