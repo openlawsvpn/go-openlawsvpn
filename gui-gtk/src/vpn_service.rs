@@ -31,7 +31,7 @@ pub enum VpnState {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum VpnCommand {
-    Connect { config_path: String },
+    Connect { config_path: String, config_content: String },
     Disconnect,
     QueryStatus,
 }
@@ -45,7 +45,7 @@ pub enum VpnCommand {
 )]
 trait VpnDaemon {
     #[zbus(name = "Connect")]
-    fn connect(&self, profile_path: &str) -> zbus::Result<()>;
+    fn connect(&self, profile_path: &str, profile_content: &str) -> zbus::Result<()>;
     #[zbus(name = "Disconnect")]
     fn disconnect(&self) -> zbus::Result<()>;
     #[zbus(name = "Status")]
@@ -126,10 +126,10 @@ fn service_thread(
 
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
-                VpnCommand::Connect { config_path } => {
+                VpnCommand::Connect { config_path, config_content } => {
                     // Pass cmd_rx into handle_connect so it can receive
                     // Disconnect while the signal loop is running.
-                    handle_connect(&dbus_conn, &event_tx, config_path, &mut cmd_rx).await;
+                    handle_connect(&dbus_conn, &event_tx, config_path, config_content, &mut cmd_rx).await;
                 }
                 VpnCommand::Disconnect => {
                     // Disconnect while not in handle_connect — daemon is probably
@@ -171,6 +171,7 @@ async fn handle_connect(
     dbus_conn: &Connection,
     event_tx: &UnboundedSender<VpnEvent>,
     config_path: String,
+    config_content: String,
     cmd_rx: &mut tokio::sync::mpsc::Receiver<VpnCommand>,
 ) {
     let proxy = match VpnDaemonProxy::new(dbus_conn).await {
@@ -200,7 +201,7 @@ async fn handle_connect(
         Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe SAMLRequired: {e}")), String::new()); return; }
     };
 
-    if let Err(e) = proxy.connect(&config_path).await {
+    if let Err(e) = proxy.connect(&config_path, &config_content).await {
         emit_state(event_tx, VpnState::Error(format!("daemon Connect: {e}")), String::new());
         return;
     }

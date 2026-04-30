@@ -233,12 +233,14 @@ impl ConnectionScreen {
                         tx.send(VpnCommand::Disconnect).await.ok();
                     });
                 } else {
-                    // Connect
+                    // Connect — read file content here (GUI user) so the daemon
+                    // (running as openlawsvpn) never needs access to ~/.local.
+                    let content = std::fs::read_to_string(&config_path).unwrap_or_default();
                     *active_id.borrow_mut() = Some(profile_id.clone());
                     let tx = vpn.cmd_tx.clone();
                     let path = config_path.clone();
                     gtk4::glib::spawn_future_local(async move {
-                        tx.send(VpnCommand::Connect { config_path: path })
+                        tx.send(VpnCommand::Connect { config_path: path, config_content: content })
                             .await
                             .ok();
                     });

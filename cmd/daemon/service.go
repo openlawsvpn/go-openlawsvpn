@@ -44,9 +44,10 @@ func newDaemonService(conn *dbus.Conn) *DaemonService {
 	return &DaemonService{conn: conn, state: vpn.StateIdle}
 }
 
-// Connect starts a VPN connection for the given .ovpn profile path.
-// Returns a D-Bus error if a connection is already active.
-func (d *DaemonService) Connect(profilePath string) *dbus.Error {
+// Connect starts a VPN connection. profilePath is used as an identifier returned
+// by Status(); profileContent is the .ovpn file content read by the GUI (the
+// daemon runs as a different user and cannot access the user's home directory).
+func (d *DaemonService) Connect(profilePath, profileContent string) *dbus.Error {
 	log.Printf("Connect: profile=%s", profilePath)
 	d.mu.Lock()
 	if d.client != nil {
@@ -55,7 +56,7 @@ func (d *DaemonService) Connect(profilePath string) *dbus.Error {
 		return dbus.NewError(dbusInterface+".Busy", []interface{}{"connection already active"})
 	}
 
-	p, err := profile.ParsePath(profilePath)
+	p, err := profile.ParseString(profileContent)
 	if err != nil {
 		d.mu.Unlock()
 		log.Printf("Connect: invalid profile: %v", err)

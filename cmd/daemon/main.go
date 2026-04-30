@@ -11,7 +11,7 @@
 //
 //	sudo systemctl enable --now openlawsvpn-daemon
 //
-// The GUI calls Connect(profile_path) and subscribes to StateChanged, LogLine,
+// The GUI calls Connect(profile_path, profile_content) and subscribes to StateChanged, LogLine,
 // StatsUpdate, and SAMLRequired signals. It never needs elevated privilege.
 package main
 
@@ -33,6 +33,7 @@ const introspectionXML = `
   <interface name="com.openlawsvpn.Daemon">
     <method name="Connect">
       <arg direction="in"  type="s" name="profile_path"/>
+      <arg direction="in"  type="s" name="profile_content"/>
     </method>
     <method name="Disconnect"/>
     <method name="Status">

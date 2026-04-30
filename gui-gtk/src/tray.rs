@@ -368,9 +368,13 @@ pub fn register(
                             // No prior connection — show window so the user can pick a profile.
                             window_ref.present();
                         } else {
+                            let content = std::fs::read_to_string(&path).unwrap_or_default();
                             let tx = vpn_tx.clone();
                             glib::spawn_future_local(async move {
-                                tx.send(crate::vpn_service::VpnCommand::Connect { config_path: path }).await.ok();
+                                tx.send(crate::vpn_service::VpnCommand::Connect {
+                                    config_path: path,
+                                    config_content: content,
+                                }).await.ok();
                             });
                         }
                     }
