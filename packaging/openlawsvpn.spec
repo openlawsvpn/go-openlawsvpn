@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        10%{?dist}
+Release:        11%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -34,8 +34,8 @@ Requires:       polkit
 
 %description daemon
 Background daemon that manages the VPN tunnel via go-openvpn3.
-Runs as a systemd user service with CAP_NET_ADMIN — no root required.
-Exposes com.openlawsvpn.Daemon on the session bus.
+Runs as a systemd system service (User= template) with CAP_NET_ADMIN.
+Exposes com.openlawsvpn.Daemon on the user's session bus.
 
 %package gui
 Summary:        openlawsvpn GTK4 GUI
@@ -81,8 +81,9 @@ cd -
 install -Dm755 %{_builddir}/openlawsvpn-daemon \
     %{buildroot}%{_libexecdir}/openlawsvpn-daemon
 
-install -Dm644 cmd/daemon/openlawsvpn-daemon.service \
-    %{buildroot}%{_userunitdir}/openlawsvpn-daemon.service
+# System service template: openlawsvpn-daemon@<username>.service
+install -Dm644 cmd/daemon/openlawsvpn-daemon@.service \
+    %{buildroot}%{_unitdir}/openlawsvpn-daemon@.service
 
 install -Dm644 packaging/10-openlawsvpn-dns.rules \
     %{buildroot}%{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
@@ -108,8 +109,8 @@ cd gui-gtk && %cargo_test && cd -
 
 %files daemon
 %license LICENSE
-%{_libexecdir}/openlawsvpn-daemon
-%{_userunitdir}/openlawsvpn-daemon.service
+%caps(cap_net_admin=eip) %{_libexecdir}/openlawsvpn-daemon
+%{_unitdir}/openlawsvpn-daemon@.service
 %{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 %{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
 
@@ -121,30 +122,31 @@ cd gui-gtk && %cargo_test && cd -
 # ── Scriptlets ────────────────────────────────────────────────────────────────
 
 %post daemon
-%systemd_post user@.service
-%systemd_user_post openlawsvpn-daemon.service
+%systemd_post openlawsvpn-daemon@.service
 
 %preun daemon
-%systemd_user_preun openlawsvpn-daemon.service
+%systemd_preun openlawsvpn-daemon@.service
 
 %postun daemon
-%systemd_postun user@.service
-%systemd_user_postun_with_restart openlawsvpn-daemon.service
+%systemd_postun_with_restart openlawsvpn-daemon@.service
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-11
+- daemon: switch from user service to system service template (openlawsvpn-daemon@.service)
+  Fedora 44 user session manager runs in a delegated child user namespace; TUNSETIFF
+  on the host /dev/net/tun fails for any user service even with CAP_NET_ADMIN because
+  ns_capable() requires the caller to be in the network namespace's owner user namespace
+  (the host init user namespace). System services with User= run in the host user
+  namespace where file capabilities and CAP_NET_ADMIN work correctly.
+  Enable with: sudo systemctl enable --now openlawsvpn-daemon@$USER.service
+
 * Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-10
-- daemon: remove %%caps and user@.service.d drop-in; rely solely on AmbientCapabilities
-  Any mount-namespace isolation (PrivateTmp/ProtectSystem/ProtectHome) creates a child
-  user namespace for unprivileged mount setup; TUNSETIFF then fails because ns_capable()
-  requires the caller to be in the host init user namespace, not a child. AmbientCapabilities
-  without isolation is the correct mechanism for user services that need TUN access.
-  File capability (cap_net_admin=eip) also removed: it clears ambient on exec, negating
-  AmbientCapabilities. CapabilityBoundingSet removed: causes exit 218 in user services.
+- daemon: attempted AmbientCapabilities-only approach (superseded by 0.1.0-11)
 
 * Wed Apr 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-9
-- daemon: add PrivateUsers=no to service unit (superseded by 0.1.0-10)
+- daemon: add PrivateUsers=no to service unit (superseded by 0.1.0-11)
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-8
 - spec: rewrite per Fedora Rust Packaging Guidelines
@@ -159,7 +161,6 @@ cd gui-gtk && %cargo_test && cd -
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-4
 - daemon: add user@.service.d drop-in to grant CAP_NET_ADMIN to user manager
-  so AmbientCapabilities in the user unit is actually propagated
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-3
 - spec: extract inline D-Bus service and .desktop files to packaging/ source files

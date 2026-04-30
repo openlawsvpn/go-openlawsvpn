@@ -1,0 +1,30 @@
+[Unit]
+Description=openlawsvpn VPN daemon for %i
+Documentation=https://openlawsvpn.com
+# Start after the user's session bus is available.
+After=network.target dbus.service user-runtime-dir@%U.service
+
+[Service]
+Type=simple
+User=%i
+Group=%i
+# Shell wrapper: resolve UID at runtime to set the session bus address.
+# System services do not inherit DBUS_SESSION_BUS_ADDRESS or XDG_RUNTIME_DIR.
+ExecStart=/bin/bash -c 'uid=$(id -u); \
+  export XDG_RUNTIME_DIR=/run/user/$uid; \
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus; \
+  exec /usr/libexec/openlawsvpn-daemon'
+Restart=on-failure
+RestartSec=3
+
+# Running as a system service keeps the process in the host init user namespace.
+# Fedora 44 user services run in a delegated child user namespace where
+# TUNSETIFF fails for the host /dev/net/tun even with CAP_NET_ADMIN set.
+# File capability (cap_net_admin=eip) on the binary is the mechanism here —
+# it works because we are in the host user namespace.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
