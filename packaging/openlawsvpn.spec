@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        12%{?dist}
+Release:        13%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -93,6 +93,9 @@ install -Dm644 packaging/com.openlawsvpn.Daemon.conf \
 install -Dm644 packaging/com.openlawsvpn.Daemon.service \
     %{buildroot}%{_datadir}/dbus-1/system-services/com.openlawsvpn.Daemon.service
 
+install -Dm644 packaging/90-openlawsvpn.preset \
+    %{buildroot}%{_presetdir}/90-openlawsvpn.preset
+
 # Install GUI binary directly from target/rpm/ (non-crate project — do not use %%cargo_install).
 install -Dm755 gui-gtk/target/rpm/openlawsvpn-gui \
     %{buildroot}%{_bindir}/openlawsvpn-gui
@@ -130,6 +133,7 @@ exit 0
 %{_datadir}/dbus-1/system.d/com.openlawsvpn.Daemon.conf
 %{_datadir}/dbus-1/system-services/com.openlawsvpn.Daemon.service
 %{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
+%{_presetdir}/90-openlawsvpn.preset
 
 %files gui
 %license gui-gtk/LICENSE.dependencies
@@ -150,6 +154,10 @@ exit 0
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-13
+- spec: ship 90-openlawsvpn.preset so openlawsvpn-daemon.service is enabled
+  automatically on fresh install (systemctl preset run by %%systemd_post)
+
 * Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-12
 - daemon: move to system bus — system service under dedicated openlawsvpn user
   Eliminates the Fedora 44 user-session user-namespace problem entirely.
