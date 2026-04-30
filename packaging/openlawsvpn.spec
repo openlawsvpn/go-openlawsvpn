@@ -121,12 +121,14 @@ cd gui-gtk && %cargo_test && cd -
 # ── Scriptlets ────────────────────────────────────────────────────────────────
 
 %post daemon
+%systemd_post user@.service
 %systemd_user_post openlawsvpn-daemon.service
 
 %preun daemon
 %systemd_user_preun openlawsvpn-daemon.service
 
 %postun daemon
+%systemd_postun user@.service
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
