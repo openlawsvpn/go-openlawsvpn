@@ -9,8 +9,10 @@ use gtk4::prelude::*;
 use libadwaita::ApplicationWindow;
 use zbus::{interface, Connection};
 use zbus::object_server::SignalEmitter;
+use futures_channel::mpsc as fmpsc;
+use futures_util::StreamExt as _;
 
-use std::sync::{Arc, Mutex, mpsc as stdmpsc};
+use std::sync::{Arc, Mutex};
 
 const ICON_CONNECTED_NAME: &str = "openlawsvpn-connected";
 const ICON_DISCONNECTED_NAME: &str = "openlawsvpn-disconnected";
@@ -36,7 +38,7 @@ pub enum TrayCmd {
 
 struct StatusNotifierItem {
     state: Arc<Mutex<TrayState>>,
-    cmd_tx: stdmpsc::SyncSender<TrayCmd>,
+    cmd_tx: fmpsc::UnboundedSender<TrayCmd>,
     icon_theme_path: String,
 }
 
@@ -109,7 +111,7 @@ impl StatusNotifierItem {
 
     // Left-click: show/raise the window.
     fn activate(&self, _x: i32, _y: i32) {
-        let _ = self.cmd_tx.send(TrayCmd::ShowWindow);
+        let _ = self.cmd_tx.unbounded_send(TrayCmd::ShowWindow);
     }
 
     fn context_menu(&self, _x: i32, _y: i32) {}
@@ -126,7 +128,7 @@ impl StatusNotifierItem {
 // ── DBusMenu ─────────────────────────────────────────────────────────────────
 
 struct DbusMenu {
-    cmd_tx: stdmpsc::SyncSender<TrayCmd>,
+    cmd_tx: fmpsc::UnboundedSender<TrayCmd>,
     state: Arc<Mutex<TrayState>>,
     revision: u32,
 }
@@ -245,13 +247,13 @@ impl DbusMenu {
     fn event(&self, id: i32, event_id: &str, _data: zbus::zvariant::Value<'_>, _timestamp: u32) {
         if event_id == "clicked" {
             match id {
-                1 => { let _ = self.cmd_tx.send(TrayCmd::ShowWindow); }
+                1 => { let _ = self.cmd_tx.unbounded_send(TrayCmd::ShowWindow); }
                 2 => {
                     let connected = self.state.lock().map(|s| s.connected).unwrap_or(false);
                     let cmd = if connected { TrayCmd::VpnDisconnect } else { TrayCmd::VpnConnect };
-                    let _ = self.cmd_tx.send(cmd);
+                    let _ = self.cmd_tx.unbounded_send(cmd);
                 }
-                4 => { let _ = self.cmd_tx.send(TrayCmd::Quit); }
+                4 => { let _ = self.cmd_tx.unbounded_send(TrayCmd::Quit); }
                 _ => {}
             }
         }
@@ -291,7 +293,7 @@ pub struct TrayGuard {
 }
 
 impl TrayGuard {
-    /// Notify the tray that connected state changed — updates icon and tooltip.
+    /// Notify the tray that connected state changed — updates icon, tooltip, and menu label.
     pub fn notify_state(&self, connected: bool) {
         if let Ok(mut s) = self.state.lock() {
             s.connected = connected;
@@ -303,16 +305,26 @@ impl TrayGuard {
                 .build()
                 .expect("tokio rt");
             rt.block_on(async move {
-                let iface_ref = conn
+                // Update StatusNotifierItem icon/status/tooltip.
+                if let Ok(iface_ref) = conn
                     .object_server()
                     .interface::<_, StatusNotifierItem>("/StatusNotifierItem")
-                    .await;
-                if let Ok(iface_ref) = iface_ref {
+                    .await
+                {
                     let signal_ctxt = iface_ref.signal_emitter().clone();
-                    let status = if connected { "Active" } else { "Active" };
-                    let _ = StatusNotifierItem::new_status(&signal_ctxt, status).await;
+                    let _ = StatusNotifierItem::new_status(&signal_ctxt, "Active").await;
                     let _ = StatusNotifierItem::new_icon(&signal_ctxt).await;
                     let _ = StatusNotifierItem::new_tooltip(&signal_ctxt).await;
+                }
+                // Tell the tray host to re-fetch the menu (Connect ↔ Disconnect label).
+                if let Ok(menu_ref) = conn
+                    .object_server()
+                    .interface::<_, DbusMenu>("/StatusNotifierItem/Menu")
+                    .await
+                {
+                    let signal_ctxt = menu_ref.signal_emitter().clone();
+                    let revision = menu_ref.get().await.revision;
+                    let _ = DbusMenu::layout_updated(&signal_ctxt, revision, 0).await;
                 }
             });
         });
@@ -347,25 +359,26 @@ pub fn register(
 ) -> Option<TrayGuard> {
     let icon_theme_path = install_icons();
 
-    let (cmd_tx, cmd_rx) = stdmpsc::sync_channel::<TrayCmd>(8);
-    let cmd_rx = Arc::new(Mutex::new(cmd_rx));
+    // futures_channel unbounded channel: sender goes to the D-Bus thread (zbus),
+    // receiver is drained in an async task on the GLib main context.
+    // Unlike idle_add_local, this future suspends between messages — no busy-loop.
+    let (cmd_tx, cmd_rx) = fmpsc::unbounded::<TrayCmd>();
 
     let conn_slot: Arc<Mutex<Option<Connection>>> = Arc::new(Mutex::new(None));
 
-    // Poll the channel from the GTK main thread using idle_add.
     {
         let window_ref = window.clone();
         let conn_slot = conn_slot.clone();
         let vpn_tx = vpn_cmd_tx.clone();
         let state = state.clone();
-        glib::idle_add_local(move || {
-            while let Ok(cmd) = cmd_rx.lock().unwrap().try_recv() {
+        glib::spawn_future_local(async move {
+            let mut rx = cmd_rx;
+            while let Some(cmd) = rx.next().await {
                 match cmd {
                     TrayCmd::ShowWindow => { window_ref.present(); }
                     TrayCmd::VpnConnect => {
                         let path = state.lock().map(|s| s.last_profile_path.clone()).unwrap_or_default();
                         if path.is_empty() {
-                            // No prior connection — show window so the user can pick a profile.
                             window_ref.present();
                         } else {
                             let content = std::fs::read_to_string(&path).unwrap_or_default();
@@ -396,7 +409,6 @@ pub fn register(
                     }
                 }
             }
-            glib::ControlFlow::Continue
         });
     }
 

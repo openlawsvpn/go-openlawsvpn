@@ -22,13 +22,12 @@ package dns
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
-	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 // Config holds the DNS servers and search domains pushed by the server.
@@ -143,52 +142,96 @@ func BackupResolvConf(backupPath string) error {
 	return nil
 }
 
-// ApplyResolved configures DNS via systemd-resolved using the resolvectl(1)
-// command-line tool (available since systemd v229).
+// resolvedObject is the D-Bus object path for the systemd-resolved Manager.
+const resolvedDest = "org.freedesktop.resolve1"
+const resolvedPath = dbus.ObjectPath("/org/freedesktop/resolve1")
+const resolvedIface = "org.freedesktop.resolve1.Manager"
+
+// ifIndex returns the OS interface index for ifName.
+func ifIndex(ifName string) (int32, error) {
+	iface, err := net.InterfaceByName(ifName)
+	if err != nil {
+		return 0, fmt.Errorf("dns: interface %q: %w", ifName, err)
+	}
+	return int32(iface.Index), nil
+}
+
+// ApplyResolved configures DNS via systemd-resolved over D-Bus (no polkit).
 //
-// It sets per-interface DNS servers and search domains scoped to ifName,
-// which is the TUN interface name.  This avoids overwriting the global
-// resolver configuration, making it easy to clean up on disconnect.
-//
-// Returns an error if resolvectl is not found or reports failure.
-// Callers that want a best-effort approach should fall back to ApplyResolvConf.
+// It calls org.freedesktop.resolve1.Manager.SetLinkDNS and SetLinkDomains,
+// scoping the servers to the TUN interface ifName.  This is equivalent to
+// what resolvectl(1) does internally, but bypasses the polkit check that
+// blocks non-interactive system service users.
 func ApplyResolved(cfg *Config, ifName string) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil
 	}
 
-	// Bound the D-Bus call so a stalled systemd-resolved never blocks the
-	// ConnectPhase2 goroutine indefinitely.  5 s is generous for a local IPC.
-	// openvpn3-core linux/ does not call resolvectl; it writes /etc/resolv.conf
-	// directly, so there is no C++ analogue — this is a Go-specific safeguard.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	// resolvectl dns <iface> <ip>...
-	args := []string{"dns", ifName}
-	for _, srv := range cfg.Servers {
-		args = append(args, srv.String())
+	idx, err := ifIndex(ifName)
+	if err != nil {
+		return err
 	}
-	if out, err := exec.CommandContext(ctx, "resolvectl", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("dns: resolvectl dns: %w\n%s", err, out)
+
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("dns: system bus: %w", err)
+	}
+	defer conn.Close()
+
+	obj := conn.Object(resolvedDest, resolvedPath)
+
+	// SetLinkDNS(ifindex int32, addresses []struct{family int32, addr []byte})
+	type addrEntry struct {
+		Family  int32
+		Address []byte
+	}
+	var addrs []addrEntry
+	for _, srv := range cfg.Servers {
+		ip4 := srv.To4()
+		if ip4 != nil {
+			addrs = append(addrs, addrEntry{Family: 2, Address: []byte(ip4)}) // AF_INET
+		} else {
+			addrs = append(addrs, addrEntry{Family: 10, Address: []byte(srv.To16())}) // AF_INET6
+		}
+	}
+	if err := obj.Call(resolvedIface+".SetLinkDNS", 0, idx, addrs).Err; err != nil {
+		return fmt.Errorf("dns: SetLinkDNS: %w", err)
 	}
 
 	if len(cfg.SearchDomains) > 0 {
-		args = []string{"domain", ifName}
-		args = append(args, cfg.SearchDomains...)
-		if out, err := exec.CommandContext(ctx, "resolvectl", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("dns: resolvectl domain: %w\n%s", err, out)
+		// SetLinkDomains(ifindex int32, domains []struct{domain string, search_only bool})
+		type domainEntry struct {
+			Domain     string
+			SearchOnly bool
+		}
+		var domains []domainEntry
+		for _, d := range cfg.SearchDomains {
+			domains = append(domains, domainEntry{Domain: d, SearchOnly: false})
+		}
+		if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
+			return fmt.Errorf("dns: SetLinkDomains: %w", err)
 		}
 	}
 	return nil
 }
 
 // RevertResolved removes per-interface DNS settings set by ApplyResolved.
+// Calls org.freedesktop.resolve1.Manager.RevertLink directly over D-Bus.
 func RevertResolved(ifName string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, "resolvectl", "revert", ifName).CombinedOutput(); err != nil {
-		return fmt.Errorf("dns: resolvectl revert: %w\n%s", err, out)
+	idx, err := ifIndex(ifName)
+	if err != nil {
+		return err
+	}
+
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return fmt.Errorf("dns: system bus: %w", err)
+	}
+	defer conn.Close()
+
+	obj := conn.Object(resolvedDest, resolvedPath)
+	if err := obj.Call(resolvedIface+".RevertLink", 0, idx).Err; err != nil {
+		return fmt.Errorf("dns: RevertLink: %w", err)
 	}
 	return nil
 }
@@ -207,22 +250,19 @@ const (
 )
 
 // Apply applies cfg using the best available backend:
-//  1. If resolvectl is found on PATH, use ApplyResolved (scoped to ifName).
-//  2. Otherwise fall back to ApplyResolvConf (overwrites /etc/resolv.conf).
+//  1. Try ApplyResolved (direct D-Bus to systemd-resolved, no polkit).
+//  2. Fall back to ApplyResolvConf (overwrites /etc/resolv.conf).
 //
 // backupPath is the path where the old /etc/resolv.conf is saved when
 // falling back to the resolv.conf backend.  Pass "" to skip the backup.
 //
 // Returns the Backend that was actually used, so Revert can call the matching
-// cleanup function.  This fixes a race where Apply fell back to ResolvConf but
-// Revert incorrectly called RevertResolved (a no-op), leaving DNS unconfigured.
+// cleanup function.
 func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
-	if _, err := exec.LookPath("resolvectl"); err == nil {
-		if err := ApplyResolved(cfg, ifName); err == nil {
-			return BackendResolved, nil
-		} else {
-			fmt.Fprintf(os.Stderr, "dns: resolvectl failed (%v), falling back to /etc/resolv.conf\n", err)
-		}
+	if err := ApplyResolved(cfg, ifName); err == nil {
+		return BackendResolved, nil
+	} else {
+		fmt.Fprintf(os.Stderr, "dns: resolved D-Bus failed (%v), falling back to /etc/resolv.conf\n", err)
 	}
 	if backupPath != "" {
 		if err := BackupResolvConf(backupPath); err != nil {

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        13%{?dist}
+Release:        15%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -154,6 +154,17 @@ exit 0
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-15
+- tray: replace idle_add_local busy-loop with futures_channel mpsc + spawn_future_local
+  Eliminates 100% CPU usage caused by zero-timeout ppoll spinning on every GLib tick
+
+* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-14
+- dns: replace resolvectl subprocess with direct D-Bus calls to
+  org.freedesktop.resolve1 (SetLinkDNS, SetLinkDomains, RevertLink)
+  Eliminates polkit interactive-auth failure for the openlawsvpn system user
+- tray: emit LayoutUpdated on state change so the menu label updates
+  correctly between "Connect VPN" and "Disconnect VPN"
+
 * Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-13
 - spec: ship 90-openlawsvpn.preset so openlawsvpn-daemon.service is enabled
   automatically on fresh install (systemctl preset run by %%systemd_post)
