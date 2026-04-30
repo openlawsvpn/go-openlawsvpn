@@ -9,19 +9,16 @@ ExecStart=/usr/libexec/openlawsvpn-daemon
 Restart=on-failure
 RestartSec=3
 
-# Allow TUN creation and routing without running as root.
+# CAP_NET_ADMIN via AmbientCapabilities only — the binary has no file capability.
+# Any mount-namespace isolation option (PrivateTmp, ProtectSystem, ProtectHome)
+# creates a child user namespace for the unprivileged mount setup. Inside that child
+# user namespace, TUNSETIFF on the host /dev/net/tun fails (ns_capable check requires
+# the caller to be in the network namespace owner's user namespace, i.e. the host init
+# user namespace — not a child). AmbientCapabilities without isolation avoids this.
+# CapabilityBoundingSet is intentionally absent: restricting it in a user service
+# causes exit 218 when the user manager's own bounding set lacks the requested cap.
 AmbientCapabilities=CAP_NET_ADMIN
-CapabilityBoundingSet=CAP_NET_ADMIN
-
-# Hardening — drop everything else.
 NoNewPrivileges=true
-# PrivateUsers=no is explicit: with PrivateUsers=yes (systemd default for user services
-# on some distros) the daemon runs in a child user namespace where CAP_NET_ADMIN is
-# scoped to that namespace, not the host net namespace — TUNSETIFF fails with EPERM.
-PrivateUsers=no
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
 ConfigurationDirectory=openlawsvpn
 ReadWritePaths=%h/.config/openlawsvpn
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        9%{?dist}
+Release:        10%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -90,9 +90,6 @@ install -Dm644 packaging/10-openlawsvpn-dns.rules \
 install -Dm644 packaging/com.openlawsvpn.Daemon.service \
     %{buildroot}%{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 
-install -Dm644 packaging/10-openlawsvpn-caps.conf \
-    %{buildroot}%{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
-
 # Install GUI binary directly from target/rpm/ (non-crate project — do not use %%cargo_install).
 install -Dm755 gui-gtk/target/rpm/openlawsvpn-gui \
     %{buildroot}%{_bindir}/openlawsvpn-gui
@@ -111,11 +108,10 @@ cd gui-gtk && %cargo_test && cd -
 
 %files daemon
 %license LICENSE
-%caps(cap_net_admin=eip) %{_libexecdir}/openlawsvpn-daemon
+%{_libexecdir}/openlawsvpn-daemon
 %{_userunitdir}/openlawsvpn-daemon.service
 %{_datadir}/dbus-1/services/com.openlawsvpn.Daemon.service
 %{_datadir}/polkit-1/rules.d/10-openlawsvpn-dns.rules
-%{_prefix}/lib/systemd/system/user@.service.d/10-openlawsvpn-caps.conf
 
 %files gui
 %license gui-gtk/LICENSE.dependencies
@@ -125,24 +121,28 @@ cd gui-gtk && %cargo_test && cd -
 # ── Scriptlets ────────────────────────────────────────────────────────────────
 
 %post daemon
-%systemd_post user@.service
 %systemd_user_post openlawsvpn-daemon.service
 
 %preun daemon
 %systemd_user_preun openlawsvpn-daemon.service
 
 %postun daemon
-%systemd_postun user@.service
 %systemd_user_postun_with_restart openlawsvpn-daemon.service
 
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-10
+- daemon: remove %%caps and user@.service.d drop-in; rely solely on AmbientCapabilities
+  Any mount-namespace isolation (PrivateTmp/ProtectSystem/ProtectHome) creates a child
+  user namespace for unprivileged mount setup; TUNSETIFF then fails because ns_capable()
+  requires the caller to be in the host init user namespace, not a child. AmbientCapabilities
+  without isolation is the correct mechanism for user services that need TUN access.
+  File capability (cap_net_admin=eip) also removed: it clears ambient on exec, negating
+  AmbientCapabilities. CapabilityBoundingSet removed: causes exit 218 in user services.
+
 * Wed Apr 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-9
-- daemon: add PrivateUsers=no to service unit
-  systemd may auto-enable PrivateUsers for user services, placing the daemon in a
-  child user namespace where CAP_NET_ADMIN is scoped to that namespace and cannot
-  create TUN devices in the host network namespace (TUNSETIFF → EPERM)
+- daemon: add PrivateUsers=no to service unit (superseded by 0.1.0-10)
 
 * Tue Apr 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-8
 - spec: rewrite per Fedora Rust Packaging Guidelines
