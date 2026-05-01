@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
+%global debug_package %{nil}
 Name:           openlawsvpn
 Version:        0.1.0
 Release:        19%{?dist}
