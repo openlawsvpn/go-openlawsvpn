@@ -2,7 +2,7 @@
 Name=openlawsvpn
 Comment=AWS Client VPN
 Exec=openlawsvpn-gui
-Icon=network-vpn
+Icon=openlawsvpn-disconnected
 Terminal=false
 Type=Application
 Categories=Network;

@@ -14,8 +14,8 @@ use futures_util::StreamExt as _;
 
 use std::sync::{Arc, Mutex};
 
+pub const ICON_DISCONNECTED_NAME: &str = "openlawsvpn-disconnected";
 const ICON_CONNECTED_NAME: &str = "openlawsvpn-connected";
-const ICON_DISCONNECTED_NAME: &str = "openlawsvpn-disconnected";
 
 const ICON_CONNECTED_SVG: &[u8] = include_bytes!("../resources/icons/vpn-connected.svg");
 const ICON_DISCONNECTED_SVG: &[u8] = include_bytes!("../resources/icons/vpn-disconnected.svg");
@@ -395,13 +395,11 @@ fn set_launch_on_login(enable: bool) {
 }
 
 /// Install custom SVG icons into the user's local icon theme (~/.local/share/icons/hicolor/scalable/apps/).
-/// Returns empty string — the icons are in the standard XDG search path so no extra IconThemePath is needed.
-fn install_icons() -> String {
+pub fn install_icons() {
     let base = dirs_or_home().join(".local/share/icons/hicolor/scalable/apps");
     let _ = std::fs::create_dir_all(&base);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_CONNECTED_NAME)), ICON_CONNECTED_SVG);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_DISCONNECTED_NAME)), ICON_DISCONNECTED_SVG);
-    String::new()
 }
 
 fn dirs_or_home() -> std::path::PathBuf {
@@ -420,7 +418,8 @@ pub fn register(
     vpn_cmd_tx: tokio::sync::mpsc::Sender<crate::vpn_service::VpnCommand>,
     rt: &tokio::runtime::Handle,
 ) -> Option<TrayGuard> {
-    let icon_theme_path = install_icons();
+    install_icons();
+    let icon_theme_path = String::new();
 
     // futures_channel unbounded channel: sender goes to the D-Bus thread (zbus),
     // receiver is drained in an async task on the GLib main context.

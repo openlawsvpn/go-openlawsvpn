@@ -12,7 +12,7 @@
 use gtk4::glib;
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Entry, Label, ListBox, Orientation,
+    Box as GtkBox, Button, Label, ListBox, Orientation,
     ScrolledWindow, SelectionMode, Spinner,
 };
 use libadwaita::prelude::*;
@@ -85,15 +85,15 @@ impl RelayScreen {
 
         let token_row = EntryRow::new();
         token_row.set_title("Organisation Token");
+        token_row.set_show_apply_button(false);
         token_row.set_text(&settings.borrow().org_token);
         prefs_group.add(&token_row);
 
         let endpoint_row = EntryRow::new();
-        endpoint_row.set_title("Relay URL (leave blank for default)");
-        let saved_url = settings.borrow().relay_url.clone();
-        if saved_url != DEFAULT_RELAY_URL {
-            endpoint_row.set_text(&saved_url);
-        }
+        endpoint_row.set_title("Relay URL");
+        endpoint_row.set_show_apply_button(false);
+        // Always show the current URL (default or custom) so the user can see and edit it.
+        endpoint_row.set_text(&settings.borrow().relay_url);
         prefs_group.add(&endpoint_row);
 
         let save_btn = Button::with_label("Save & Refresh");
@@ -183,12 +183,14 @@ impl RelayScreen {
             let endpoint_row = endpoint_row.clone();
             save_btn.connect_clicked(move |_| {
                 let token = token_row.text().to_string();
-                let url_text = endpoint_row.text().to_string();
+                let url_text = endpoint_row.text().to_string().trim().to_string();
                 let relay_url = if url_text.is_empty() {
                     DEFAULT_RELAY_URL.to_string()
                 } else {
                     url_text
                 };
+                // Update the URL field to show what was actually saved.
+                endpoint_row.set_text(&relay_url);
                 let new_settings = RelaySettings { org_token: token, relay_url };
                 sc.borrow().settings.replace(new_settings.clone());
                 new_settings.save();
@@ -281,15 +283,6 @@ impl RelayScreen {
             return;
         }
 
-        let agents_ref = self.agents.clone();
-        let screen_weak = Rc::downgrade(&{
-            // We need to rebuild rows after fetch — store a callback via glib idle.
-            // Since we can't pass self easily, we use a channel pattern:
-            // spawn an async task that does the HTTP fetch then idles back.
-            agents_ref.clone() // placeholder — see below
-        });
-        let _ = screen_weak; // suppress unused warning
-
         let agents_out = self.agents.clone();
         let list = self.agent_list.clone();
         let no_label = self.no_agents_label.clone();
@@ -299,21 +292,30 @@ impl RelayScreen {
         let vpn = self.vpn.clone();
         let toast = self.toast_overlay.clone();
 
+        // Spawn a plain OS thread for the blocking HTTP call and send the result
+        // back via a oneshot channel. glib::spawn_future_local can then await it
+        // without needing a Tokio runtime on the GTK main thread.
+        let (tx, rx) = futures_channel::oneshot::channel::<Result<Vec<AgentInfo>, String>>();
+        let url = format!("{}/agents?token={}", relay_url, urlencoding::encode(&token));
+        std::thread::spawn(move || {
+            let result = reqwest::blocking::get(&url)
+                .and_then(|r| r.error_for_status())
+                .and_then(|r| r.json::<Vec<AgentInfo>>())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+
         glib::spawn_future_local(async move {
-            let url = format!("{}/agents?token={}", relay_url,
-                urlencoding::encode(&token));
-
-            let result = tokio::task::spawn_blocking(move || {
-                // Blocking HTTP on a thread-pool thread — keeps GTK main loop free.
-                let resp = reqwest::blocking::get(&url)
-                    .and_then(|r| r.error_for_status())
-                    .and_then(|r| r.json::<Vec<AgentInfo>>());
-                resp
-            }).await;
-
-            let agents = match result {
+            let agents = match rx.await {
                 Ok(Ok(a)) => a,
-                _ => return, // silently ignore transient errors during polling
+                Ok(Err(e)) => {
+                    // Show network errors in the status label instead of panicking.
+                    no_label.set_visible(true);
+                    no_label.set_text(&format!("Could not reach relay: {e}"));
+                    scroll.set_visible(false);
+                    return;
+                }
+                Err(_) => return, // sender dropped (thread panicked)
             };
 
             *agents_out.borrow_mut() = agents.clone();
@@ -324,6 +326,7 @@ impl RelayScreen {
             }
 
             if agents.is_empty() {
+                no_label.set_text("No agents online.\nStart an agent with: openlawsvpn-cli --relay=<token>");
                 no_label.set_visible(true);
                 scroll.set_visible(false);
                 return;

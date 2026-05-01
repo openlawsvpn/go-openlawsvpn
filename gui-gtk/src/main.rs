@@ -64,6 +64,9 @@ fn main() {
 
     app.connect_startup(|_| {
         libadwaita::init().expect("Failed to initialize libadwaita");
+        // Install SVG icons before the first window appears so the launcher,
+        // taskbar, and Alt+Tab switcher all show the openlawsvpn icon.
+        tray::install_icons();
     });
 
     app.connect_activate(|app| {
@@ -132,6 +135,7 @@ fn build_ui(app: &Application) {
         .default_height(640)
         .content(&content)
         .build();
+    window.set_icon_name(Some(tray::ICON_DISCONNECTED_NAME));
 
     // ── System tray ─────────────────────────────────────────────────────────
     let tray_state = Arc::new(Mutex::new(TrayState::default()));

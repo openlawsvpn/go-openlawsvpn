@@ -106,7 +106,7 @@ srpm:
 ## Install missing RPM build dependencies (requires sudo), then build binary RPMs.
 ## Uses dnf builddep which handles %%generate_buildrequires automatically.
 rpm: srpm
-	sudo dnf builddep -y $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1)
+	#sudo dnf builddep -y $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1)
 	rpmbuild --rebuild $$(find $(RPM_OUTDIR)/SRPMS -name '*.src.rpm' | head -1) \
 	    --define "_topdir $(RPM_OUTDIR)"
 	@echo ""

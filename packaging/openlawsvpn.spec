@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        18%{?dist}
+Release:        19%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -103,6 +103,12 @@ install -Dm755 gui-gtk/target/rpm/openlawsvpn-gui \
 install -Dm644 packaging/openlawsvpn-gui.desktop \
     %{buildroot}%{_datadir}/applications/openlawsvpn-gui.desktop
 
+install -Dm644 gui-gtk/resources/icons/vpn-disconnected.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-disconnected.svg
+
+install -Dm644 gui-gtk/resources/icons/vpn-connected.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-connected.svg
+
 # ── Check ─────────────────────────────────────────────────────────────────────
 
 %if %{with check}
@@ -139,8 +145,17 @@ exit 0
 %license gui-gtk/LICENSE.dependencies
 %{_bindir}/openlawsvpn-gui
 %{_datadir}/applications/openlawsvpn-gui.desktop
+%{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-disconnected.svg
+%{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-connected.svg
 
 # ── Scriptlets ────────────────────────────────────────────────────────────────
+
+%post gui
+%{?ldconfig_scriptlet}
+gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
+
+%postun gui
+gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 
 %post daemon
 %systemd_post openlawsvpn-daemon.service
@@ -154,6 +169,12 @@ exit 0
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-19
+- gui: ship openlawsvpn-disconnected/connected SVG icons in hicolor theme
+  Fixes generic blue-gear icon in dock and wrong padlock in GNOME launcher
+- gui: set window icon-name to openlawsvpn-disconnected at startup
+- desktop: Icon= now uses openlawsvpn-disconnected (matches tray icon)
+
 * Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-18
 - feat(relay): Option A relay — daemon owns :35001; new ConnectRelay D-Bus method
   performs Phase 1 + ACS capture + POST /execute to relay API
