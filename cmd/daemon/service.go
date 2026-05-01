@@ -29,6 +29,12 @@ const (
 	samlTimeout     = 5 * time.Minute
 )
 
+// Extra state strings for the relay flow (not part of vpn.ClientState).
+const (
+	stateRelayDelivering = "relay_delivering" // credentials sent to relay API
+	stateRelayConnected  = "relay_connected"  // agent reported tunnel up
+)
+
 // DaemonService implements the com.openlawsvpn.Daemon D-Bus interface.
 // It wraps a go-openvpn3 Client and serialises all VPN operations.
 type DaemonService struct {
@@ -196,13 +202,181 @@ func (d *DaemonService) Status() (string, string, string, string, *dbus.Error) {
 	return st.String(), serverIP, assignedIP, profilePath, nil
 }
 
+// ConnectRelay performs the full relay auth flow on behalf of the GUI:
+//  1. POST /connect → session_id
+//  2. Phase 1 against AWS VPN → CRV1 challenge (state_id, saml_url, remote_ip)
+//  3. ACS server captures SAMLResponse (same :35001 ownership as local flow)
+//  4. POST /session/:id/execute delivers credentials to the waiting agent
+//
+// The daemon emits StateChanged("relay_delivering"/"relay_connected") and the
+// standard SAMLRequired signal so the GUI opens the browser as usual.
+// orgToken and relayBaseURL scope the relay org; pass empty relayBaseURL to use
+// the production default.
+func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgToken, relayBaseURL string) *dbus.Error {
+	log.Printf("ConnectRelay: profile=%s agent=%s", profilePath, agentID)
+
+	if relayBaseURL == "" {
+		relayBaseURL = relayDefaultBase
+	}
+
+	d.mu.Lock()
+	if d.client != nil {
+		d.mu.Unlock()
+		return dbus.NewError(dbusInterface+".Busy", []interface{}{"connection already active"})
+	}
+
+	p, err := profile.ParseString(profileContent)
+	if err != nil {
+		d.mu.Unlock()
+		return dbus.NewError(dbusInterface+".InvalidProfile", []interface{}{err.Error()})
+	}
+
+	client := vpn.New(p)
+	ctx, cancel := context.WithCancel(context.Background())
+	d.client = client
+	d.cancel = cancel
+	d.profilePath = profilePath
+	d.mu.Unlock()
+
+	client.EventFn = func(e vpn.Event) {
+		switch e.Type {
+		case vpn.EventStateChanged:
+			log.Printf("relay state: %s serverIP=%q msg=%q", e.State, e.ServerIP, e.Message)
+			d.mu.Lock()
+			d.state = e.State
+			d.mu.Unlock()
+			d.emitStateChanged(e.State, e.ServerIP, e.Message)
+		case vpn.EventLog:
+			log.Printf("relay vpn: %s", e.Message)
+			d.emitLogLine(e.Message)
+		}
+	}
+
+	// Capture state_id, saml_response, remote_ip from the SAML challenge.
+	// These are needed for the /execute call after ACS captures the token.
+	type samlCapture struct {
+		stateID   string
+		samlToken string
+	}
+	captured := make(chan samlCapture, 1)
+
+	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
+		log.Printf("relay saml: starting ACS server, URL: %s", challenge.URL)
+		acs, err := saml.NewACSServer()
+		if err != nil {
+			return "", fmt.Errorf("relay: ACS server: %w", err)
+		}
+		samlCtx, samlCancel := context.WithTimeout(ctx, samlTimeout)
+		defer samlCancel()
+
+		d.emitSAMLRequired(challenge.URL)
+		log.Printf("relay saml: waiting for browser callback on :35001")
+
+		token, err := acs.Wait(samlCtx)
+		if err != nil {
+			return "", err
+		}
+		log.Printf("relay saml: token received (len=%d)", len(token))
+
+		// Send captured data to the goroutine below.
+		captured <- samlCapture{
+			stateID:   challenge.StateID,
+			samlToken: token,
+		}
+		// Return the token so the Go client proceeds normally; we cancel context
+		// immediately after so Phase 2 is aborted on this machine — the agent
+		// does Phase 2, not us.
+		return token, nil
+	}
+
+	go func() {
+		log.Printf("relay goroutine: starting")
+		defer func() {
+			d.mu.Lock()
+			d.client = nil
+			d.cancel = nil
+			d.profilePath = ""
+			d.mu.Unlock()
+		}()
+
+		// Step 1: reserve the agent.
+		sessionID, err := relayConnect(relayBaseURL, orgToken, agentID)
+		if err != nil {
+			log.Printf("relay: connect: %v", err)
+			d.emitLogLine(fmt.Sprintf("relay: reserve agent: %v", err))
+			d.emitStateChangedStr(vpn.StateError.String(), "", err.Error())
+			cancel()
+			return
+		}
+		log.Printf("relay: session_id=%s", sessionID)
+
+		// Step 2: run Phase 1 through the Go client — it will call SAMLTokenFn,
+		// which starts the ACS server, emits SAMLRequired, and captures the token.
+		// We cancel the client context as soon as we have the SAML token so the
+		// client does not proceed to create a TUN on this machine.
+		phase1Done := make(chan error, 1)
+		go func() {
+			phase1Done <- client.Connect(ctx)
+		}()
+
+		var cap samlCapture
+		select {
+		case cap = <-captured:
+			// Token captured — cancel Phase 2 on our side immediately.
+			cancel()
+			// Drain the phase1Done error (context cancelled — expected).
+			<-phase1Done
+		case err := <-phase1Done:
+			// Connect returned before we got a token (auth failure, network error).
+			if ctx.Err() == nil {
+				msg := ""
+				if err != nil {
+					msg = err.Error()
+				}
+				log.Printf("relay: phase1 failed: %v", err)
+				d.emitStateChangedStr(vpn.StateError.String(), "", msg)
+			}
+			return
+		case <-ctx.Done():
+			// User called Disconnect before SAML completed.
+			<-phase1Done
+			return
+		}
+
+		// Step 3: deliver credentials to the relay.
+		d.emitStateChangedStr(stateRelayDelivering, "", "")
+		log.Printf("relay: delivering credentials to session %s", sessionID)
+
+		// Phase1IP() is the sticky remote VPN server IP captured during Phase 1.
+		remoteIP := client.Phase1IP()
+		if err := relayExecute(relayBaseURL, sessionID, profileContent,
+			cap.stateID, cap.samlToken, remoteIP); err != nil {
+			log.Printf("relay: execute: %v", err)
+			d.emitLogLine(fmt.Sprintf("relay: deliver credentials: %v", err))
+			d.emitStateChangedStr(vpn.StateError.String(), "", err.Error())
+			return
+		}
+
+		log.Printf("relay: credentials delivered, agent is executing Phase 2")
+		d.emitStateChangedStr(stateRelayConnected, agentID, "")
+	}()
+
+	return nil
+}
+
 // ---- signal helpers --------------------------------------------------------
 
 func (d *DaemonService) emitStateChanged(state vpn.ClientState, serverIP, assignedIP string) {
+	d.emitStateChangedStr(state.String(), serverIP, assignedIP)
+}
+
+// emitStateChangedStr emits StateChanged with a raw string state — used for
+// relay-specific states that are not part of vpn.ClientState.
+func (d *DaemonService) emitStateChangedStr(state, serverIP, assignedIP string) {
 	d.conn.Emit( //nolint:errcheck
 		dbus.ObjectPath(dbusObjectPath),
 		dbusInterface+".StateChanged",
-		state.String(), serverIP, assignedIP,
+		state, serverIP, assignedIP,
 	)
 }
 

@@ -26,12 +26,23 @@ pub enum VpnState {
     Disconnecting,
     NeedReauth,
     Error(String),
+    /// Relay: credentials delivered to relay API, remote agent is executing Phase 2.
+    RelayDelivering { agent_id: String },
+    /// Relay: remote agent has the tunnel up (this machine is NOT tunnelled).
+    RelayConnected { agent_id: String },
 }
 
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum VpnCommand {
     Connect { config_path: String, config_content: String },
+    ConnectRelay {
+        config_path: String,
+        config_content: String,
+        agent_id: String,
+        org_token: String,
+        relay_url: String,
+    },
     Disconnect,
     QueryStatus,
 }
@@ -46,6 +57,15 @@ pub enum VpnCommand {
 trait VpnDaemon {
     #[zbus(name = "Connect")]
     fn connect(&self, profile_path: &str, profile_content: &str) -> zbus::Result<()>;
+    #[zbus(name = "ConnectRelay")]
+    fn connect_relay(
+        &self,
+        profile_path: &str,
+        profile_content: &str,
+        agent_id: &str,
+        org_token: &str,
+        relay_base_url: &str,
+    ) -> zbus::Result<()>;
     #[zbus(name = "Disconnect")]
     fn disconnect(&self) -> zbus::Result<()>;
     #[zbus(name = "Status")]
@@ -127,13 +147,16 @@ fn service_thread(
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 VpnCommand::Connect { config_path, config_content } => {
-                    // Pass cmd_rx into handle_connect so it can receive
-                    // Disconnect while the signal loop is running.
                     handle_connect(&dbus_conn, &event_tx, config_path, config_content, &mut cmd_rx).await;
                 }
+                VpnCommand::ConnectRelay { config_path, config_content, agent_id, org_token, relay_url } => {
+                    handle_connect_relay(
+                        &dbus_conn, &event_tx,
+                        config_path, config_content, agent_id, org_token, relay_url,
+                        &mut cmd_rx,
+                    ).await;
+                }
                 VpnCommand::Disconnect => {
-                    // Disconnect while not in handle_connect — daemon is probably
-                    // already idle, but call it anyway and reset state.
                     let proxy = VpnDaemonProxy::new(&dbus_conn).await;
                     if let Ok(p) = proxy {
                         let _ = p.disconnect().await;
@@ -208,8 +231,6 @@ async fn handle_connect(
 
     loop {
         tokio::select! {
-            // Incoming command — only Disconnect is handled here; Connect/QueryStatus
-            // are deferred until after this connection ends.
             cmd = cmd_rx.recv() => {
                 match cmd {
                     Some(VpnCommand::Disconnect) => {
@@ -222,13 +243,7 @@ async fn handle_connect(
                         emit_state(event_tx, VpnState::Idle, String::new());
                         return;
                     }
-                    Some(other) => {
-                        // Re-queue: put it back by processing after this loop exits.
-                        // Since we can't un-recv, just drop non-Disconnect commands
-                        // while a connection is active (Connect while connected is
-                        // already blocked in the UI).
-                        drop(other);
-                    }
+                    Some(other) => { drop(other); }
                     None => return,
                 }
             }
@@ -266,18 +281,119 @@ async fn handle_connect(
     }
 }
 
+async fn handle_connect_relay(
+    dbus_conn: &Connection,
+    event_tx: &UnboundedSender<VpnEvent>,
+    config_path: String,
+    config_content: String,
+    agent_id: String,
+    org_token: String,
+    relay_url: String,
+    cmd_rx: &mut tokio::sync::mpsc::Receiver<VpnCommand>,
+) {
+    let proxy = match VpnDaemonProxy::new(dbus_conn).await {
+        Ok(p) => p,
+        Err(e) => {
+            emit_state(event_tx, VpnState::Error(
+                format!("D-Bus proxy: {e} — is openlawsvpn-daemon running?"),
+            ), String::new());
+            return;
+        }
+    };
+
+    let mut state_stream = match proxy.receive_state_changed().await {
+        Ok(s) => s,
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe StateChanged: {e}")), String::new()); return; }
+    };
+    let mut log_stream = match proxy.receive_log_line().await {
+        Ok(s) => s,
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe LogLine: {e}")), String::new()); return; }
+    };
+    let mut saml_stream = match proxy.receive_saml_required().await {
+        Ok(s) => s,
+        Err(e) => { emit_state(event_tx, VpnState::Error(format!("subscribe SAMLRequired: {e}")), String::new()); return; }
+    };
+
+    if let Err(e) = proxy.connect_relay(
+        &config_path, &config_content, &agent_id, &org_token, &relay_url,
+    ).await {
+        emit_state(event_tx, VpnState::Error(format!("daemon ConnectRelay: {e}")), String::new());
+        return;
+    }
+
+    loop {
+        tokio::select! {
+            cmd = cmd_rx.recv() => {
+                match cmd {
+                    Some(VpnCommand::Disconnect) => {
+                        if let Err(e) = proxy.disconnect().await {
+                            event_tx.unbounded_send(VpnEvent::LogLine(
+                                format!("daemon Disconnect: {e}")
+                            )).ok();
+                        }
+                        emit_state(event_tx, VpnState::Idle, String::new());
+                        return;
+                    }
+                    Some(other) => { drop(other); }
+                    None => return,
+                }
+            }
+            Some(sig) = state_stream.next() => {
+                if let Ok(args) = sig.args() {
+                    let state = parse_relay_state(args.state, args.server_ip);
+                    let terminal = matches!(state,
+                        VpnState::Idle | VpnState::Error(_) | VpnState::RelayConnected { .. }
+                    );
+                    emit_state(event_tx, state, config_path.clone());
+                    if terminal { return; }
+                }
+            }
+            Some(sig) = log_stream.next() => {
+                if let Ok(args) = sig.args() {
+                    event_tx.unbounded_send(VpnEvent::LogLine(args.line.to_string())).ok();
+                }
+            }
+            Some(sig) = saml_stream.next() => {
+                if let Ok(args) = sig.args() {
+                    emit_state(event_tx, VpnState::WaitingSaml {
+                        saml_url: args.url.to_string(),
+                    }, config_path.clone());
+                }
+            }
+            else => break,
+        }
+    }
+}
+
 fn parse_state(state: &str, server_ip: &str, assigned_ip: &str) -> VpnState {
     match state {
-        "idle"         => VpnState::Idle,
-        "connecting"   => VpnState::Connecting,
-        "waiting_saml" => VpnState::WaitingSaml { saml_url: String::new() },
-        "connected"    => VpnState::Connected {
+        "idle"              => VpnState::Idle,
+        "connecting"        => VpnState::Connecting,
+        "waiting_saml"      => VpnState::WaitingSaml { saml_url: String::new() },
+        "connected"         => VpnState::Connected {
             server_ip: server_ip.to_string(),
             assigned_ip: assigned_ip.to_string(),
         },
-        "disconnecting" => VpnState::Disconnecting,
-        "error"         => VpnState::Error(assigned_ip.to_string()),
-        other           => VpnState::Error(format!("unknown daemon state: {other}")),
+        "disconnecting"     => VpnState::Disconnecting,
+        "error"             => VpnState::Error(assigned_ip.to_string()),
+        "relay_delivering"  => VpnState::RelayDelivering { agent_id: server_ip.to_string() },
+        "relay_connected"   => VpnState::RelayConnected { agent_id: server_ip.to_string() },
+        other               => VpnState::Error(format!("unknown daemon state: {other}")),
+    }
+}
+
+// parse_relay_state maps daemon state strings during a relay flow.
+// server_ip carries agent_id for relay-specific states.
+fn parse_relay_state(state: &str, agent_id: &str) -> VpnState {
+    match state {
+        "idle"             => VpnState::Idle,
+        "connecting"       => VpnState::Connecting,
+        "waiting_saml"     => VpnState::WaitingSaml { saml_url: String::new() },
+        "disconnecting"    => VpnState::Disconnecting,
+        "relay_delivering" => VpnState::RelayDelivering { agent_id: agent_id.to_string() },
+        "relay_connected"  => VpnState::RelayConnected { agent_id: agent_id.to_string() },
+        "error"            => VpnState::Error(agent_id.to_string()),
+        other              => VpnState::Error(format!("unknown daemon state: {other}")),
     }
 }
 

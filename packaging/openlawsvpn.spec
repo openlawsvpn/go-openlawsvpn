@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        17%{?dist}
+Release:        18%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -154,6 +154,13 @@ exit 0
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-18
+- feat(relay): Option A relay — daemon owns :35001; new ConnectRelay D-Bus method
+  performs Phase 1 + ACS capture + POST /execute to relay API
+- gui: new Relay tab with org token settings, live agent list (5s poll),
+  per-agent Connect button, relay state display
+- vpn_service: RelayDelivering/RelayConnected states; VpnCommand::ConnectRelay
+
 * Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-17
 - tray: add "Launch on Login" checkmark menu item backed by XDG autostart
   (~/.config/autostart/openlawsvpn-gui.desktop)

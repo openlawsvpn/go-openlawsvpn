@@ -35,6 +35,13 @@ const introspectionXML = `
       <arg direction="in"  type="s" name="profile_path"/>
       <arg direction="in"  type="s" name="profile_content"/>
     </method>
+    <method name="ConnectRelay">
+      <arg direction="in"  type="s" name="profile_path"/>
+      <arg direction="in"  type="s" name="profile_content"/>
+      <arg direction="in"  type="s" name="agent_id"/>
+      <arg direction="in"  type="s" name="org_token"/>
+      <arg direction="in"  type="s" name="relay_base_url"/>
+    </method>
     <method name="Disconnect"/>
     <method name="Status">
       <arg direction="out" type="s" name="state"/>

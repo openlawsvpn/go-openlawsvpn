@@ -3,6 +3,8 @@ mod about_view;
 mod connection;
 mod log_view;
 mod profile_store;
+mod relay;
+mod relay_store;
 mod tray;
 mod vpn_service;
 
@@ -10,6 +12,7 @@ use about_view::AboutView;
 use connection::{ConnectionScreen, ConnectionState};
 use log_view::LogView;
 use profile_store::ProfileStore;
+use relay::RelayScreen;
 use tray::TrayState;
 use vpn_service::{VpnEvent, VpnService, VpnState};
 
@@ -82,6 +85,7 @@ fn build_ui(app: &Application) {
     let vpn = Rc::new(VpnService::new());
 
     let connection_screen = ConnectionScreen::new(store.clone(), vpn.clone());
+    let relay_screen = RelayScreen::new(store.clone(), vpn.clone());
     let log_view = Rc::new(LogView::new());
     let about_view = AboutView::new();
 
@@ -93,6 +97,13 @@ fn build_ui(app: &Application) {
         "Connect",
     );
     conn_page.set_icon_name(Some("network-vpn-symbolic"));
+
+    let relay_page = stack.add_titled(
+        relay_screen.borrow().get_widget(),
+        Some("relay"),
+        "Relay",
+    );
+    relay_page.set_icon_name(Some("network-server-symbolic"));
 
     let log_page = stack.add_titled(&log_view.widget, Some("log"), "Log");
     log_page.set_icon_name(Some("dialog-information-symbolic"));
@@ -170,16 +181,12 @@ fn build_ui(app: &Application) {
         while let Some(event) = event_rx.next().await {
             match event {
                 VpnEvent::StateChanged { ref state, ref profile_path } => {
-                    let connected = matches!(state, VpnState::Connected { .. });
-                    if let Ok(mut ts) = tray_state.lock() {
-                        ts.connected = connected;
-                        if !profile_path.is_empty() {
-                            ts.last_profile_path = profile_path.clone();
-                        }
-                    }
-                    if let Some(ref guard) = tray_guard {
-                        guard.notify_state(connected);
-                    }
+                    // Relay states are handled by the relay screen, not the
+                    // connection screen.
+                    let is_relay = matches!(state,
+                        VpnState::RelayDelivering { .. } | VpnState::RelayConnected { .. }
+                    );
+                    // Open browser for SAML — applies to both local and relay flows.
                     if let VpnState::WaitingSaml { ref saml_url } = state {
                         if !saml_url.is_empty() {
                             log_view.append_line("saml: opening browser for authentication…");
@@ -194,8 +201,22 @@ fn build_ui(app: &Application) {
                             }
                         }
                     }
-                    let ui_state = vpn_state_to_ui(state);
-                    connection_screen.borrow_mut().set_state(ui_state, profile_path.clone());
+                    if is_relay {
+                        relay_screen.borrow().set_relay_state(state);
+                    } else {
+                        let connected = matches!(state, VpnState::Connected { .. });
+                        if let Ok(mut ts) = tray_state.lock() {
+                            ts.connected = connected;
+                            if !profile_path.is_empty() {
+                                ts.last_profile_path = profile_path.clone();
+                            }
+                        }
+                        if let Some(ref guard) = tray_guard {
+                            guard.notify_state(connected);
+                        }
+                        let ui_state = vpn_state_to_ui(state);
+                        connection_screen.borrow_mut().set_state(ui_state, profile_path.clone());
+                    }
                 }
                 VpnEvent::LogLine(line) => {
                     log_view.append_line(&line);
@@ -225,5 +246,6 @@ fn vpn_state_to_ui(state: &VpnState) -> ConnectionState {
         VpnState::Disconnecting => ConnectionState::Disconnecting,
         VpnState::NeedReauth => ConnectionState::NeedReauth { reason: String::new() },
         VpnState::Error(msg) => ConnectionState::Error { message: msg.clone() },
+        VpnState::RelayDelivering { .. } | VpnState::RelayConnected { .. } => ConnectionState::Idle,
     }
 }
