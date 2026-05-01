@@ -9,15 +9,21 @@ license = "LGPL-2.1-or-later"
 name = "openlawsvpn-gui"
 path = "src/main.rs"
 
+# Parallel codegen units: release default is 1 (max LTO), which serializes
+# all LLVM work. 16 units parallelize across cores at minor binary-size cost.
+# lto = "thin" keeps cross-unit inlining without the full-LTO serial bottleneck.
+[profile.release]
+codegen-units = 16
+lto = "thin"
+
 [dependencies]
 gtk4 = { version = "0.11", features = ["v4_10"] }
 libadwaita = { version = "0.9", features = ["v1_5"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 env_logger = "0.11"
-once_cell = "1"
 futures-channel = "0.3"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }

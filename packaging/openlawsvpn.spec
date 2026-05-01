@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        15%{?dist}
+Release:        17%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -154,22 +154,32 @@ exit 0
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-15
+* Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-17
+- tray: add "Launch on Login" checkmark menu item backed by XDG autostart
+  (~/.config/autostart/openlawsvpn-gui.desktop)
+
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-16
+- spec: fix bogus changelog dates (Wed → Thu for Apr 30 2026)
+- build: switch linker to mold for x86_64/aarch64/armv7/ppc64le/ppc64
+- build: trim tokio features (full → rt+rt-multi-thread+sync+macros)
+- build: codegen-units=16 + lto=thin for parallel LLVM codegen
+
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-15
 - tray: replace idle_add_local busy-loop with futures_channel mpsc + spawn_future_local
   Eliminates 100% CPU usage caused by zero-timeout ppoll spinning on every GLib tick
 
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-14
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-14
 - dns: replace resolvectl subprocess with direct D-Bus calls to
   org.freedesktop.resolve1 (SetLinkDNS, SetLinkDomains, RevertLink)
   Eliminates polkit interactive-auth failure for the openlawsvpn system user
 - tray: emit LayoutUpdated on state change so the menu label updates
   correctly between "Connect VPN" and "Disconnect VPN"
 
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-13
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-13
 - spec: ship 90-openlawsvpn.preset so openlawsvpn-daemon.service is enabled
   automatically on fresh install (systemctl preset run by %%systemd_post)
 
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-12
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-12
 - daemon: move to system bus — system service under dedicated openlawsvpn user
   Eliminates the Fedora 44 user-session user-namespace problem entirely.
   System services run in the host init user namespace; file capabilities and
@@ -178,10 +188,10 @@ exit 0
   RPM %%pre creates openlawsvpn user/group and adds human users to the group.
   GUI connects to system bus instead of session bus.
 
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-11
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-11
 - daemon: switch to system service template (superseded by 0.1.0-12)
 
-* Wed Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-10
+* Thu Apr 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-10
 - daemon: attempted AmbientCapabilities-only approach (superseded by 0.1.0-12)
 
 * Wed Apr 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-9

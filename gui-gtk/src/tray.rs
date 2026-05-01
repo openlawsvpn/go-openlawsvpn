@@ -34,6 +34,7 @@ pub enum TrayCmd {
     Quit,
     VpnConnect,
     VpnDisconnect,
+    ToggleLaunchOnLogin,
 }
 
 struct StatusNotifierItem {
@@ -161,6 +162,7 @@ impl DbusMenu {
 
         let connected = self.state.lock().map(|s| s.connected).unwrap_or(false);
         let vpn_label = if connected { "Disconnect VPN" } else { "Connect VPN" };
+        let lol_checked = launch_on_login_enabled();
 
         let show_item: (i32, HashMap<String, Value>, Vec<Value>) = (
             1,
@@ -185,6 +187,22 @@ impl DbusMenu {
             [("type".to_string(), Value::from("separator"))].into(),
             vec![],
         );
+        let lol_item: (i32, HashMap<String, Value>, Vec<Value>) = (
+            5,
+            [
+                ("label".to_string(), Value::from("Launch on Login")),
+                ("enabled".to_string(), Value::from(true)),
+                ("visible".to_string(), Value::from(true)),
+                ("toggle-type".to_string(), Value::from("checkmark")),
+                ("toggle-state".to_string(), Value::from(if lol_checked { 1i32 } else { 0i32 })),
+            ].into(),
+            vec![],
+        );
+        let sep2: (i32, HashMap<String, Value>, Vec<Value>) = (
+            6,
+            [("type".to_string(), Value::from("separator"))].into(),
+            vec![],
+        );
         let quit_item: (i32, HashMap<String, Value>, Vec<Value>) = (
             4,
             [
@@ -202,6 +220,8 @@ impl DbusMenu {
                 Value::from(show_item),
                 Value::from(vpn_item),
                 Value::from(sep),
+                Value::from(lol_item),
+                Value::from(sep2),
                 Value::from(quit_item),
             ],
         );
@@ -219,6 +239,7 @@ impl DbusMenu {
 
         let connected = self.state.lock().map(|s| s.connected).unwrap_or(false);
         let vpn_label = if connected { "Disconnect VPN" } else { "Connect VPN" };
+        let lol_checked = launch_on_login_enabled();
 
         ids.into_iter().filter_map(|id| {
             let props: HashMap<String, Value> = match id {
@@ -232,11 +253,18 @@ impl DbusMenu {
                     ("enabled".to_string(), Value::from(true)),
                     ("visible".to_string(), Value::from(true)),
                 ].into(),
-                3 => [("type".to_string(), Value::from("separator"))].into(),
+                3 | 6 => [("type".to_string(), Value::from("separator"))].into(),
                 4 => [
                     ("label".to_string(), Value::from("Quit")),
                     ("enabled".to_string(), Value::from(true)),
                     ("visible".to_string(), Value::from(true)),
+                ].into(),
+                5 => [
+                    ("label".to_string(), Value::from("Launch on Login")),
+                    ("enabled".to_string(), Value::from(true)),
+                    ("visible".to_string(), Value::from(true)),
+                    ("toggle-type".to_string(), Value::from("checkmark")),
+                    ("toggle-state".to_string(), Value::from(if lol_checked { 1i32 } else { 0i32 })),
                 ].into(),
                 _ => return None,
             };
@@ -254,6 +282,7 @@ impl DbusMenu {
                     let _ = self.cmd_tx.unbounded_send(cmd);
                 }
                 4 => { let _ = self.cmd_tx.unbounded_send(TrayCmd::Quit); }
+                5 => { let _ = self.cmd_tx.unbounded_send(TrayCmd::ToggleLaunchOnLogin); }
                 _ => {}
             }
         }
@@ -331,6 +360,40 @@ impl TrayGuard {
     }
 }
 
+// ── Autostart (Launch on Login) ───────────────────────────────────────────────
+
+const AUTOSTART_DESKTOP: &str = "\
+[Desktop Entry]\n\
+Type=Application\n\
+Name=openlawsvpn\n\
+Exec=openlawsvpn-gui\n\
+Icon=network-vpn\n\
+Comment=AWS Client VPN\n\
+Terminal=false\n\
+X-GNOME-Autostart-enabled=true\n\
+";
+
+fn autostart_path() -> std::path::PathBuf {
+    dirs_or_home()
+        .join(".config/autostart/openlawsvpn-gui.desktop")
+}
+
+pub fn launch_on_login_enabled() -> bool {
+    autostart_path().exists()
+}
+
+fn set_launch_on_login(enable: bool) {
+    let path = autostart_path();
+    if enable {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, AUTOSTART_DESKTOP);
+    } else {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// Install custom SVG icons into the user's local icon theme (~/.local/share/icons/hicolor/scalable/apps/).
 /// Returns empty string — the icons are in the standard XDG search path so no extra IconThemePath is needed.
 fn install_icons() -> String {
@@ -396,6 +459,23 @@ pub fn register(
                         glib::spawn_future_local(async move {
                             tx.send(crate::vpn_service::VpnCommand::Disconnect).await.ok();
                         });
+                    }
+                    TrayCmd::ToggleLaunchOnLogin => {
+                        set_launch_on_login(!launch_on_login_enabled());
+                        // Re-fetch conn from slot to emit LayoutUpdated.
+                        if let Some(conn) = conn_slot.lock().unwrap().clone() {
+                            glib::spawn_future_local(async move {
+                                if let Ok(menu_ref) = conn
+                                    .object_server()
+                                    .interface::<_, DbusMenu>("/StatusNotifierItem/Menu")
+                                    .await
+                                {
+                                    let signal_ctxt = menu_ref.signal_emitter().clone();
+                                    let revision = menu_ref.get().await.revision;
+                                    let _ = DbusMenu::layout_updated(&signal_ctxt, revision, 0).await;
+                                }
+                            });
+                        }
                     }
                     TrayCmd::Quit => {
                         if let Some(conn) = conn_slot.lock().unwrap().take() {

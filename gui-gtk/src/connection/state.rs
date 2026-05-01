@@ -12,7 +12,7 @@ pub enum ConnectionState {
 
 impl ConnectionState {
     pub fn is_busy(&self) -> bool {
-        matches!(self, Self::Connecting | Self::WaitingSaml | Self::Disconnecting)
+        matches!(self, Self::Connecting | Self::Disconnecting)
     }
 
     pub fn status_text(&self) -> Option<String> {
@@ -36,6 +36,7 @@ impl ConnectionState {
     pub fn button_label(&self) -> &'static str {
         match self {
             Self::Connected { .. } | Self::Disconnecting => "Disconnect",
+            Self::WaitingSaml => "Cancel",
             _ => "Connect",
         }
     }

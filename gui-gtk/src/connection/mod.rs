@@ -202,7 +202,8 @@ impl ConnectionScreen {
         // Disable when busy (another profile connecting, or self is mid-transition)
         let self_busy = is_active && current_state.is_busy();
         btn.set_sensitive(!any_busy || (is_active && matches!(current_state,
-            ConnectionState::Connected { .. } | ConnectionState::NeedReauth { .. } | ConnectionState::Error { .. }
+            ConnectionState::Connected { .. } | ConnectionState::WaitingSaml |
+            ConnectionState::NeedReauth { .. } | ConnectionState::Error { .. }
         )));
         if self_busy {
             btn.set_sensitive(false);
@@ -225,9 +226,10 @@ impl ConnectionScreen {
                 let is_active = active_id.borrow().as_deref() == Some(&profile_id);
                 let cur = state.borrow().clone();
 
-                if is_active && matches!(cur, ConnectionState::Connected { .. }) {
-                    // Disconnect — leave active_id set so the row keeps showing
-                    // "Disconnecting" spinner; set_state(Idle) will clear it.
+                if is_active && matches!(cur,
+                    ConnectionState::Connected { .. } | ConnectionState::WaitingSaml
+                ) {
+                    // Disconnect or cancel SAML wait.
                     let tx = vpn.cmd_tx.clone();
                     gtk4::glib::spawn_future_local(async move {
                         tx.send(VpnCommand::Disconnect).await.ok();

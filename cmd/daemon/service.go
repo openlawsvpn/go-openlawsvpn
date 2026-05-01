@@ -26,6 +26,7 @@ const (
 	dbusObjectPath  = "/com/openlawsvpn/Daemon"
 	dbusInterface   = "com.openlawsvpn.Daemon"
 	statsInterval   = 5 * time.Second
+	samlTimeout     = 5 * time.Minute
 )
 
 // DaemonService implements the com.openlawsvpn.Daemon D-Bus interface.
@@ -94,10 +95,16 @@ func (d *DaemonService) Connect(profilePath, profileContent string) *dbus.Error 
 			log.Printf("saml: ACS server error: %v", err)
 			return "", fmt.Errorf("daemon: start ACS server: %w", err)
 		}
-		log.Printf("saml: ACS server ready, emitting SAMLRequired signal")
+		// Apply a timeout so SAML wait never blocks indefinitely if the browser
+		// is never opened or the wrong browser is used (no SSO session).
+		// The user can also cancel early by clicking "Cancel" in the GUI, which
+		// calls Disconnect and cancels ctx.
+		samlCtx, samlCancel := context.WithTimeout(ctx, samlTimeout)
+		defer samlCancel()
+		log.Printf("saml: ACS server ready, emitting SAMLRequired signal (timeout %s)", samlTimeout)
 		d.emitSAMLRequired(challenge.URL)
 		log.Printf("saml: waiting for browser callback on :35001")
-		token, err := acs.Wait(ctx)
+		token, err := acs.Wait(samlCtx)
 		if err != nil {
 			log.Printf("saml: ACS wait error: %v", err)
 			return "", err
