@@ -1,0 +1,100 @@
+name: VPN Integration
+
+# Runs the relay agent in CI mode, waits for the tunnel to come up, then
+# verifies connectivity to an internal service via the VPN.
+#
+# Requires these repository secrets:
+#   RELAY_TOKEN   — org token registered in relay-organisations DynamoDB table
+#
+# The mobile/desktop app (or any operator with the org token) must approve the
+# connection in the relay app UI within ~5 minutes of the job starting.
+# In practice, automate approval via the relay API from another step or a
+# separate tool.
+
+on:
+  workflow_dispatch:   # manual trigger
+  # Uncomment to run on every push to main:
+  # push:
+  #   branches: [main]
+
+jobs:
+  vpn-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Build ovpn3
+        run: CGO_ENABLED=0 go build -o /usr/local/bin/ovpn3 ./cmd/ovpn3
+
+      - name: Start relay agent (background)
+        env:
+          RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
+        run: |
+          sudo -E CI=true ovpn3 -relay "$RELAY_TOKEN" \
+            2>/tmp/ovpn3.log &
+          echo $! > /tmp/ovpn3.pid
+          echo "relay agent started (pid $(cat /tmp/ovpn3.pid))"
+
+      - name: Wait for tunnel up
+        timeout-minutes: 10
+        run: |
+          echo "Waiting for OVPN3_TUNNEL_UP..."
+          # ovpn3 writes OVPN3_TUNNEL_UP to stdout; sudo redirects stdout to
+          # the same terminal so we tail the process substitution via the log.
+          # We check stderr log for the human-readable message as a fallback.
+          for i in $(seq 1 120); do
+            if grep -q "OVPN3_TUNNEL_UP\|tunnel up" /tmp/ovpn3.log 2>/dev/null; then
+              echo "Tunnel is up (attempt $i)"
+              break
+            fi
+            if [ $i -eq 120 ]; then
+              echo "ERROR: tunnel did not come up within 10 minutes"
+              cat /tmp/ovpn3.log
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Check internal service health
+        run: |
+          echo "Testing connectivity to internal service..."
+          response=$(curl -si --max-time 10 http://10.130.32.32:5080/healthz)
+          echo "$response"
+
+          # Assert HTTP 200
+          if ! echo "$response" | grep -q "HTTP/1.1 200 OK"; then
+            echo "ERROR: expected HTTP 200, got:"
+            echo "$response"
+            exit 1
+          fi
+
+          # Assert {"status":"ok"}
+          if ! echo "$response" | grep -q '"status":"ok"'; then
+            echo "ERROR: expected {\"status\":\"ok\"} in body"
+            exit 1
+          fi
+
+          echo "Health check passed"
+
+      - name: Disconnect VPN
+        if: always()
+        run: |
+          if [ -f /tmp/ovpn3.pid ]; then
+            sudo kill "$(cat /tmp/ovpn3.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload relay agent log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovpn3-log
+          path: /tmp/ovpn3.log
+          if-no-files-found: ignore

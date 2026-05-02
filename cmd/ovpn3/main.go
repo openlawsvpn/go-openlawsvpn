@@ -24,13 +24,34 @@
 //	-relay           Organisation token for relay mode.  When set, the CLI connects
 //	                 to the relay WebSocket and waits for the mobile/desktop app to
 //	                 deliver credentials; Phase 1 and SAML run on the app, not here.
-//	-relay-endpoint  Relay WebSocket URL (default: wss://relay.openlawsvpn.com/ws).
+//	-relay-endpoint  Relay WebSocket URL (default: wss://ws.relay.openlawsvpn.com/ws).
 //	-agent-id        Stable UUID for this agent (default: random, changes on restart).
 //	-hostname        Human-readable label shown in the app (default: os.Hostname).
 //
-// The command prints the SAML URL to stdout, waits for authentication, then
-// prints "tunnel up" once the tunnel is established.  Send SIGINT or SIGTERM
-// to disconnect gracefully.
+// # CI / headless mode
+//
+// When the CI environment variable is set (any non-empty value — GitHub Actions,
+// GitLab CI, Jenkins, and most CI systems set it automatically), the relay agent
+// runs in foreground mode:
+//
+//   - The tunnel comes up and the process blocks, keeping the VPN alive for the
+//     rest of the pipeline job.
+//   - Once the tunnel is established, a machine-readable line is printed to stdout
+//     so that the calling shell script or workflow step can detect readiness:
+//
+//	OVPN3_TUNNEL_UP local=<outbound-ip> vpn=<assigned-ip> endpoint=<server-ip>
+//
+//   - The process exits with code 0 when the context is cancelled (SIGINT/SIGTERM
+//     or the job finishes and the step is killed).
+//   - In relay mode with CI=true, the process does NOT exit after Phase 2 delivers
+//     credentials — it stays connected and forwards the "tunnel up" line so the
+//     next pipeline step can proceed.
+//
+// Example GitHub Actions step:
+//
+//	- name: Connect VPN
+//	  run: sudo ovpn3 -relay ${{ secrets.RELAY_TOKEN }} &
+//	  # Next step runs after tunnel is up (detected via log polling or sleep)
 //
 // Build as a fully static binary:
 //
@@ -331,9 +352,14 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		fmt.Fprintf(os.Stderr, "ovpn3: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
 			localIP, client.LocalIP(), payload.RemoteIP)
 
+		// In CI mode print a machine-readable ready line so the next pipeline
+		// step can detect tunnel readiness by polling stdout/stderr.
+		if isCI() {
+			fmt.Printf("OVPN3_TUNNEL_UP local=%s vpn=%s endpoint=%s\n",
+				localIP, client.LocalIP(), payload.RemoteIP)
+		}
+
 		// Notify the relay (and therefore the app) that the tunnel is up.
-		// Report the machine's outbound IP, not the VPN tunnel IP, so the App
-		// can show which host is running the tunnel.
 		if agentPtr != nil {
 			agentPtr.SendStatus(ctx, payload.SessionID, "connected", localIP)
 		}
@@ -369,6 +395,13 @@ func outboundIP() string {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// isCI reports whether the process is running inside a CI environment.
+// GitHub Actions, GitLab CI, CircleCI, Jenkins and most other systems set CI.
+func isCI() bool {
+	v := os.Getenv("CI")
+	return v != "" && v != "0" && v != "false"
 }
 
 // protoName returns a human-readable protocol string.
