@@ -50,25 +50,6 @@
 //	  -logfile /tmp/openlawsvpn.log
 //	# returns once the tunnel is up; VPN runs in background
 //
-// # CI / headless mode
-//
-// When the CI environment variable is set (any non-empty value — GitHub Actions,
-// GitLab CI, Jenkins, and most CI systems set it automatically), the relay agent
-// runs in foreground mode:
-//
-//   - The tunnel comes up and the process blocks, keeping the VPN alive for the
-//     rest of the pipeline job.
-//   - Once the tunnel is established, a machine-readable line is printed to stdout
-//     so that the calling shell script or workflow step can detect readiness:
-//
-//	OVPN3_TUNNEL_UP local=<outbound-ip> vpn=<assigned-ip> endpoint=<server-ip>
-//
-//   - The process exits with code 0 when the context is cancelled (SIGINT/SIGTERM
-//     or the job finishes and the step is killed).
-//   - In relay mode with CI=true, the process does NOT exit after Phase 2 delivers
-//     credentials — it stays connected and forwards the "tunnel up" line so the
-//     next pipeline step can proceed.
-//
 // Build as a fully static binary:
 //
 //	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
@@ -429,15 +410,6 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
 			localIP, client.LocalIP(), payload.RemoteIP)
 
-		// In CI mode print a machine-readable ready line. Written to both
-		// stdout (for script piping) and stderr (so 2>/log or &>/log both work).
-		if isCI() {
-			line := fmt.Sprintf("OVPN3_TUNNEL_UP local=%s vpn=%s endpoint=%s",
-				localIP, client.LocalIP(), payload.RemoteIP)
-			fmt.Println(line)
-			fmt.Fprintln(os.Stderr, line)
-		}
-
 		notifyReady(readyFD, localIP)
 
 		// Notify the relay (and therefore the app) that the tunnel is up.
@@ -476,13 +448,6 @@ func outboundIP() string {
 	}
 	defer conn.Close()
 	return conn.LocalAddr().(*net.UDPAddr).IP.String()
-}
-
-// isCI reports whether the process is running inside a CI environment.
-// GitHub Actions, GitLab CI, CircleCI, Jenkins and most other systems set CI.
-func isCI() bool {
-	v := os.Getenv("CI")
-	return v != "" && v != "0" && v != "false"
 }
 
 // spawnDaemon re-execs the current binary in the background, waits for the
