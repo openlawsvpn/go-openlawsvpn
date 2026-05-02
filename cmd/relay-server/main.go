@@ -214,6 +214,13 @@ func (srv *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.NotFound(w, r)
 		}
+	case strings.HasPrefix(path, "/api/v1/session/") && strings.HasSuffix(path, "/release") && r.Method == http.MethodDelete:
+		parts := strings.Split(strings.TrimPrefix(path, "/api/v1/session/"), "/")
+		if len(parts) == 2 {
+			srv.handleRelease(w, r, parts[0])
+		} else {
+			http.NotFound(w, r)
+		}
 	default:
 		http.NotFound(w, r)
 	}
@@ -300,6 +307,23 @@ func (srv *server) handleExecute(w http.ResponseWriter, r *http.Request, session
 		return
 	}
 	log.Printf("phase2 delivered: session=%s agent=%s", sessionID, sess.AgentID)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (srv *server) handleRelease(w http.ResponseWriter, r *http.Request, sessionID string) {
+	sess := srv.st.getSession(sessionID)
+	if sess == nil {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	push, _ := json.Marshal(map[string]any{
+		"action":     "disconnect",
+		"session_id": sessionID,
+		"payload":    map[string]string{},
+	})
+	srv.st.pushToAgent(sess.AgentID, push)
+	log.Printf("release: session=%s agent=%s", sessionID, sess.AgentID)
 	w.WriteHeader(http.StatusOK)
 }
 

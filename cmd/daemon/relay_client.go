@@ -47,6 +47,29 @@ func relayExecute(baseURL, sessionID, ovpnConfig, stateID, samlResponse, remoteI
 	return err
 }
 
+// relayRelease calls DELETE /session/:id/release to tell the relay to push
+// a disconnect action to the remote agent.
+func relayRelease(baseURL, orgToken, sessionID string) error {
+	body, _ := json.Marshal(map[string]string{"token": orgToken})
+	req, err := http.NewRequest(http.MethodDelete,
+		fmt.Sprintf("%s/session/%s/release", baseURL, sessionID),
+		bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("relay: build release request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := relayHTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("relay: DELETE release: %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		raw, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("relay: release HTTP %d — %s", res.StatusCode, string(raw))
+	}
+	return nil
+}
+
 func relayPost(url string, body []byte) (map[string]interface{}, error) {
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {

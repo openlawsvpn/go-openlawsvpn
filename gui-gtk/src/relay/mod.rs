@@ -292,6 +292,8 @@ impl RelayScreen {
         let store = self.store.clone();
         let vpn = self.vpn.clone();
         let toast = self.toast_overlay.clone();
+        let disconnect_btn = self.disconnect_btn.clone();
+        let status_label = self.status_label.clone();
 
         // Spawn a plain OS thread for the blocking HTTP call and send the result
         // back via a oneshot channel. glib::spawn_future_local can then await it
@@ -407,6 +409,16 @@ impl RelayScreen {
                 }
 
                 list.append(&row);
+            }
+
+            // If an agent is already connected and we have no active relay flow
+            // (e.g. fresh app open), infer Connected state from the agent list.
+            if !any_busy {
+                if let Some(agent) = agents.iter().find(|a| a.status == "connected") {
+                    status_label.set_text(&format!("Agent {} tunnel is up.", agent.hostname));
+                    status_label.set_visible(true);
+                    disconnect_btn.set_visible(true);
+                }
             }
         });
     }

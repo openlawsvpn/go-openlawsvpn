@@ -45,6 +45,11 @@ type DaemonService struct {
 	cancel      context.CancelFunc
 	state       vpn.ClientState
 	profilePath string
+
+	// Active relay session — set after /execute succeeds, cleared on release.
+	relaySessionID  string
+	relayBaseURL    string
+	relayOrgToken   string
 }
 
 func newDaemonService(conn *dbus.Conn) *DaemonService {
@@ -171,16 +176,33 @@ func (d *DaemonService) Connect(profilePath, profileContent string) *dbus.Error 
 }
 
 // Disconnect gracefully tears down the active connection.
-// No-op if idle.
+// In relay mode, also sends a release to the relay server so the remote agent disconnects.
 func (d *DaemonService) Disconnect() *dbus.Error {
 	d.mu.Lock()
 	cancel := d.cancel
+	sessionID := d.relaySessionID
+	baseURL := d.relayBaseURL
+	orgToken := d.relayOrgToken
+	if sessionID != "" {
+		d.relaySessionID = ""
+		d.relayBaseURL = ""
+		d.relayOrgToken = ""
+	}
 	d.mu.Unlock()
+
 	if cancel != nil {
 		log.Printf("Disconnect: cancelling active connection")
 		cancel()
 	} else {
 		log.Printf("Disconnect: no active connection")
+	}
+
+	if sessionID != "" {
+		log.Printf("Disconnect: releasing relay session %s", sessionID)
+		if err := relayRelease(baseURL, orgToken, sessionID); err != nil {
+			log.Printf("Disconnect: relay release: %v", err)
+		}
+		d.emitStateChangedStr(vpn.StateIdle.String(), "", "")
 	}
 	return nil
 }
@@ -374,6 +396,12 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 		}
 
 		log.Printf("relay: credentials delivered, agent is executing Phase 2")
+		// Store session so Disconnect() can release it later.
+		d.mu.Lock()
+		d.relaySessionID = sessionID
+		d.relayBaseURL = relayBaseURL
+		d.relayOrgToken = orgToken
+		d.mu.Unlock()
 		d.emitStateChangedStr(stateRelayConnected, agentID, "")
 	}()
 

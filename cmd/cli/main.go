@@ -86,6 +86,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	vpn "github.com/openlawsvpn/go-openlawsvpn"
@@ -373,8 +374,34 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 	// call SendStatus without a circular dependency.
 	var agentPtr *relay.Agent
 
-	cfg.OnPhase2 = func(ctx context.Context, payload relay.Phase2Payload) error {
+	// vpnCancel is set inside OnPhase2 so OnDisconnect can tear down the tunnel.
+	var vpnCancelMu sync.Mutex
+	var vpnCancel context.CancelFunc
+
+	cfg.OnDisconnect = func() {
+		vpnCancelMu.Lock()
+		c := vpnCancel
+		vpnCancelMu.Unlock()
+		if c != nil {
+			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: relay: server requested disconnect")
+			c()
+		}
+	}
+
+	cfg.OnPhase2 = func(phaseCtx context.Context, payload relay.Phase2Payload) error {
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: received phase2 for session %s\n", payload.SessionID)
+
+		// Create a child context so OnDisconnect can cancel just the tunnel.
+		tunnelCtx, tunnelCancel := context.WithCancel(phaseCtx)
+		vpnCancelMu.Lock()
+		vpnCancel = tunnelCancel
+		vpnCancelMu.Unlock()
+		defer func() {
+			vpnCancelMu.Lock()
+			vpnCancel = nil
+			vpnCancelMu.Unlock()
+			tunnelCancel()
+		}()
 
 		// Payload config takes precedence; fall back to local profile if absent.
 		var connProfile *profile.Profile
@@ -395,7 +422,7 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		// skips Phase 1 entirely and connects directly to the sticky backend IP.
 		client.SetRelayPhase2(payload.RemoteIP, payload.StateID)
 
-		if err := client.ConnectPhase2(ctx, payload.SAMLResponse); err != nil {
+		if err := client.ConnectPhase2(tunnelCtx, payload.SAMLResponse); err != nil {
 			return fmt.Errorf("relay: phase2 connect: %w", err)
 		}
 		localIP := outboundIP()

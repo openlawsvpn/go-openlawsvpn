@@ -187,6 +187,42 @@ func TestHandleMessagePhase2(t *testing.T) {
 	}
 }
 
+func TestHandleMessageDisconnectCallsCallback(t *testing.T) {
+	called := make(chan struct{}, 1)
+	a := &Agent{
+		cfg: Config{
+			Token:        "tok",
+			Log:          func(string) {},
+			OnPhase2:     nopPhase2,
+			OnDisconnect: func() { called <- struct{}{} },
+		},
+	}
+	msg := `{"action":"disconnect","session_id":"s","payload":{}}`
+	if err := a.handleMessage(context.Background(), []byte(msg)); err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("OnDisconnect not called within 1s")
+	}
+}
+
+func TestHandleMessageDisconnectNilCallback(t *testing.T) {
+	// OnDisconnect = nil must not panic.
+	a := &Agent{
+		cfg: Config{
+			Token:    "tok",
+			Log:      func(string) {},
+			OnPhase2: nopPhase2,
+		},
+	}
+	msg := `{"action":"disconnect","session_id":"s","payload":{}}`
+	if err := a.handleMessage(context.Background(), []byte(msg)); err != nil {
+		t.Fatalf("handleMessage: %v", err)
+	}
+}
+
 func TestHandleMessageUnknownAction(t *testing.T) {
 	logs := make(chan string, 4)
 	a := &Agent{

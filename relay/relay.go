@@ -62,6 +62,9 @@ type Config struct {
 	// It should block until the VPN tunnel is established (or fails).
 	// It must be safe to call concurrently with Run.
 	OnPhase2 func(ctx context.Context, p Phase2Payload) error
+	// OnDisconnect is called when the relay server requests the agent to disconnect.
+	// The agent should tear down any active VPN tunnel. May be nil.
+	OnDisconnect func()
 	// Log receives diagnostic messages. Defaults to no-op if nil.
 	Log func(msg string)
 }
@@ -217,6 +220,9 @@ func (a *Agent) handleMessage(ctx context.Context, msg []byte) error {
 
 	case "disconnect":
 		a.cfg.Log("relay: server requested disconnect")
+		if a.cfg.OnDisconnect != nil {
+			a.cfg.OnDisconnect()
+		}
 
 	default:
 		a.cfg.Log(fmt.Sprintf("relay: unknown action %q", envelope.Action))

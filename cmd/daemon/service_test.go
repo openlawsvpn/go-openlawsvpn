@@ -108,6 +108,70 @@ func TestDisconnectIdempotent(t *testing.T) {
 	}
 }
 
+// TestDisconnectClearsRelaySession verifies that relay session fields are
+// cleared after Disconnect, even when the release HTTP call fails.
+func TestDisconnectClearsRelaySession(t *testing.T) {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		t.Skipf("no session bus: %v", err)
+	}
+	defer conn.Close()
+
+	svc := newDaemonService(conn)
+	svc.mu.Lock()
+	svc.relaySessionID = "sess-abc"
+	svc.relayBaseURL = "http://127.0.0.1:1" // unreachable — release will fail fast
+	svc.relayOrgToken = "tok"
+	svc.mu.Unlock()
+
+	// Disconnect must not block or panic even when the release endpoint is down.
+	done := make(chan struct{})
+	go func() {
+		svc.Disconnect() //nolint:errcheck
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Disconnect blocked for >5s")
+	}
+
+	svc.mu.Lock()
+	sid := svc.relaySessionID
+	svc.mu.Unlock()
+	if sid != "" {
+		t.Errorf("relaySessionID not cleared after Disconnect, got %q", sid)
+	}
+}
+
+// TestRelaySessionStoredAfterExecute verifies that relaySessionID is set when
+// injected directly (unit-level check of field assignment).
+func TestRelaySessionStoredAfterExecute(t *testing.T) {
+	svc := &DaemonService{state: vpn.StateIdle}
+	svc.mu.Lock()
+	svc.relaySessionID = "sess-xyz"
+	svc.relayBaseURL = "https://api.relay.openlawsvpn.com/api/v1"
+	svc.relayOrgToken = "mytoken"
+	svc.mu.Unlock()
+
+	svc.mu.Lock()
+	sid := svc.relaySessionID
+	url := svc.relayBaseURL
+	tok := svc.relayOrgToken
+	svc.mu.Unlock()
+
+	if sid != "sess-xyz" {
+		t.Errorf("relaySessionID = %q", sid)
+	}
+	if url == "" {
+		t.Error("relayBaseURL empty")
+	}
+	if tok != "mytoken" {
+		t.Errorf("relayOrgToken = %q", tok)
+	}
+}
+
 // TestStatusIdle verifies Status returns "idle" with empty IPs when nothing is connected.
 func TestStatusIdle(t *testing.T) {
 	svc := &DaemonService{state: vpn.StateIdle}
