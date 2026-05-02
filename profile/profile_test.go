@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/profile"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
 )
 
 const minimal = `

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/prf"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
 )
 
 // TestDeriveLength checks that Derive produces exactly n bytes.

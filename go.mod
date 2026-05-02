@@ -1,4 +1,4 @@
-module github.com/openlawsvpn/go-openvpn3
+module github.com/openlawsvpn/go-openlawsvpn
 
 go 1.25.9
 

@@ -28,9 +28,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/ctls"
-	"github.com/openlawsvpn/go-openvpn3/internal/prf"
-	"github.com/openlawsvpn/go-openvpn3/testenv"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
 // TestTLSHandshakeAgainstMockServer dials the mock server, completes the

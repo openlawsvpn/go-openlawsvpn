@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/crypto"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
 )
 
 func TestParseSuite(t *testing.T) {

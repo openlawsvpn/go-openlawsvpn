@@ -36,17 +36,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
-	"github.com/openlawsvpn/go-openvpn3/dns"
-	"github.com/openlawsvpn/go-openvpn3/internal/ctls"
-	"github.com/openlawsvpn/go-openvpn3/internal/datachannel"
-	"github.com/openlawsvpn/go-openvpn3/internal/framing"
-	"github.com/openlawsvpn/go-openvpn3/internal/mssfix"
-	"github.com/openlawsvpn/go-openvpn3/internal/prf"
-	"github.com/openlawsvpn/go-openvpn3/internal/reliable"
-	"github.com/openlawsvpn/go-openvpn3/profile"
-	"github.com/openlawsvpn/go-openvpn3/routing"
-	"github.com/openlawsvpn/go-openvpn3/tun"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/mssfix"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/prf"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
 // SAMLChallenge holds the parsed fields from a CRV1 SAML challenge.

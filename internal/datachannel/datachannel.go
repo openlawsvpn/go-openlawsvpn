@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/crypto"
-	"github.com/openlawsvpn/go-openvpn3/internal/framing"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/crypto"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 )
 
 // replayWindowSize is the number of bits in the replay-protection window.

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/reliable"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/reliable"
 )
 
 // --- SendQueue tests ---

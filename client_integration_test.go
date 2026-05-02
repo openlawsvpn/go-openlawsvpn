@@ -20,9 +20,9 @@ import (
 	"testing"
 	"time"
 
-	vpn "github.com/openlawsvpn/go-openvpn3"
-	"github.com/openlawsvpn/go-openvpn3/profile"
-	"github.com/openlawsvpn/go-openvpn3/testenv"
+	vpn "github.com/openlawsvpn/go-openlawsvpn"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
 // buildMockServer compiles the mock server binary into a temp dir and returns

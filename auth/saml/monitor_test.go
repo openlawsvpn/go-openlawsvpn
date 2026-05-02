@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 )
 
 func TestSessionMonitorAuthFailed(t *testing.T) {

@@ -38,7 +38,7 @@ If `CAP_NET_ADMIN` is granted to that binary, every one of those code paths runs
 The daemon is a small, auditable Go binary with no UI code. Its only external dependencies are:
 
 - `github.com/godbus/dbus/v5` — D-Bus session bus client
-- `github.com/openlawsvpn/go-openvpn3` — the VPN protocol engine
+- `github.com/openlawsvpn/go-openlawsvpn` — the VPN protocol engine
 
 The VPN engine itself uses only the Go standard library and has `CGO_ENABLED=0`. There is no C runtime, no dynamic linking, and no image-processing or rendering code.
 

@@ -35,7 +35,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/datachannel"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 )
 
 // TestPingThroughDataChannel establishes an in-process TLS session using the

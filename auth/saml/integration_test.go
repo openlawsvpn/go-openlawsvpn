@@ -39,8 +39,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
-	"github.com/openlawsvpn/go-openvpn3/testenv"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
 // TestCRV1RoundTripMockServer performs a complete SAML/CRV1 two-phase

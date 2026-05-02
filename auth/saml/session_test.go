@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 )
 
 // readWriter couples a bytes.Buffer (for Read) with another buffer (for Write).

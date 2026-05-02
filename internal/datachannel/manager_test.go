@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/datachannel"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 )
 
 // makeGCMPair returns a loopback GCM channel pair (a→b, b→a).

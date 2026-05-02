@@ -7,9 +7,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/openlawsvpn/go-openvpn3/dns"
-	"github.com/openlawsvpn/go-openvpn3/routing"
-	"github.com/openlawsvpn/go-openvpn3/tun"
+	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
 // openNativeTUN opens /dev/net/tun, configures the interface, applies routes

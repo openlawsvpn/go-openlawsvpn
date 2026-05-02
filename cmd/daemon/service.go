@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	vpn "github.com/openlawsvpn/go-openvpn3"
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
-	"github.com/openlawsvpn/go-openvpn3/profile"
+	vpn "github.com/openlawsvpn/go-openlawsvpn"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
 )
 
 const (

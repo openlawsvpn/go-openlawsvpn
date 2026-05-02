@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/framing"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 )
 
 // FuzzReadTCP feeds random byte slices to ReadTCP to verify it never panics.

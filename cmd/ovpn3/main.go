@@ -71,10 +71,10 @@ import (
 	"strings"
 	"syscall"
 
-	vpn "github.com/openlawsvpn/go-openvpn3"
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
-	"github.com/openlawsvpn/go-openvpn3/profile"
-	"github.com/openlawsvpn/go-openvpn3/relay"
+	vpn "github.com/openlawsvpn/go-openlawsvpn"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/openlawsvpn/go-openlawsvpn/relay"
 )
 
 func main() {

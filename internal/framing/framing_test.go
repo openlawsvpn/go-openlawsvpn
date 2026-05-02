@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/framing"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 )
 
 // TestFirstByte checks that opcode+keyid encoding round-trips.

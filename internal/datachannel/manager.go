@@ -24,7 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/compress"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 )
 
 // DefaultRenegSec is the default key renegotiation interval (3600 s = 1 hour).

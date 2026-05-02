@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 )
 
 func TestClassifyMsg(t *testing.T) {

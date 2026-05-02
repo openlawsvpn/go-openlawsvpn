@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/auth/saml"
+	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 )
 
 // FuzzParseCRV1 feeds random strings to ParseCRV1 to verify it never panics.

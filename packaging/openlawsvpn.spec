@@ -10,7 +10,7 @@ Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 SourceLicense:  BSL-1.1
 License:        BSL-1.1
 
-URL:            https://github.com/openlawsvpn/go-openvpn3
+URL:            https://github.com/openlawsvpn/go-openlawsvpn
 Source0:        {{{ git_repo_pack }}}
 
 # Tests are not shipped in the source tree — disable check bcond.
@@ -21,7 +21,7 @@ BuildRequires:  cargo-rpm-macros
 
 %description
 AWS Client VPN client with full SAML/SSO support.
-Pure Go protocol engine (go-openvpn3) with a GTK4 GUI.
+Pure Go protocol engine (go-openlawsvpn) with a GTK4 GUI.
 No OpenVPN Inc runtime required.
 
 # ── Subpackages ───────────────────────────────────────────────────────────────
@@ -34,7 +34,7 @@ Requires:       polkit
 %{?systemd_requires}
 
 %description daemon
-Background daemon that manages the VPN tunnel via go-openvpn3.
+Background daemon that manages the VPN tunnel via go-openlawsvpn.
 Runs as a systemd system service under the openlawsvpn user with CAP_NET_ADMIN.
 Exposes com.openlawsvpn.Daemon on the system bus.
 
@@ -55,7 +55,7 @@ Includes system-tray support via StatusNotifierItem.
 # ── Prep ──────────────────────────────────────────────────────────────────────
 
 %prep
-%setup -T -b 0 -q -n go-openvpn3
+%setup -T -b 0 -q -n go-openlawsvpn
 cd gui-gtk && %cargo_prep && cd -
 
 # ── Dynamic BuildRequires ─────────────────────────────────────────────────────

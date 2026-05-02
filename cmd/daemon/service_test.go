@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	vpn "github.com/openlawsvpn/go-openvpn3"
+	vpn "github.com/openlawsvpn/go-openlawsvpn"
 )
 
 // fakeConn satisfies the Emit call on *dbus.Conn for tests.

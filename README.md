@@ -36,8 +36,8 @@ CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
 sudo ./ovpn3 -config your.ovpn
 
 # Android .aar (requires gomobile + Android NDK)
-gomobile bind -o go-openvpn3.aar -target android -androidapi 31 \
-    github.com/openlawsvpn/go-openvpn3
+gomobile bind -o go-openlawsvpn.aar -target android -androidapi 31 \
+    github.com/openlawsvpn/go-openlawsvpn
 ```
 
 ### RPM packages (Fedora / RHEL)
@@ -85,7 +85,7 @@ go test -v -tags=integration -timeout 120s .
 | Workflow | Trigger | What it does |
 |---|---|---|
 | **CI** (`ci.yml`) | push / PR to `main` | `go build`, `go test -race`, `go vet` |
-| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openvpn3.aar` via `gomobile bind`, publishes GitHub Release, notifies `openlawsvpn-android-go` to open a version-bump PR |
+| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, notifies `openlawsvpn-android-go` to open a version-bump PR |
 
 ### Publishing a new release
 

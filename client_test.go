@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	vpn "github.com/openlawsvpn/go-openvpn3"
-	"github.com/openlawsvpn/go-openvpn3/profile"
+	vpn "github.com/openlawsvpn/go-openlawsvpn"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
 )
 
 func makeTestProfile() *profile.Profile {

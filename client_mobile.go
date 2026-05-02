@@ -18,8 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/openlawsvpn/go-openvpn3/profile"
-	"github.com/openlawsvpn/go-openvpn3/tun"
+	"github.com/openlawsvpn/go-openlawsvpn/profile"
+	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
 // MobileCallbacks is a gomobile interface implemented by the Android/iOS layer.

@@ -7,7 +7,7 @@ package testenv_test
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/testenv"
+	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
 
 // TestStartStop verifies that the mock server container starts, emits a

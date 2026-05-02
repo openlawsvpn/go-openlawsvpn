@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/routing"
+	"github.com/openlawsvpn/go-openlawsvpn/routing"
 )
 
 // FuzzParsePushReply feeds random strings to ParsePushReply to verify it

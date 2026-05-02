@@ -3,7 +3,7 @@ package compress_test
 import (
 	"testing"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/compress"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 )
 
 // TestParseModeNone verifies that a PUSH_REPLY without compression options

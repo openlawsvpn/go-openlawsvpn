@@ -5,9 +5,9 @@ package vpn
 import (
 	"fmt"
 
-	"github.com/openlawsvpn/go-openvpn3/dns"
-	"github.com/openlawsvpn/go-openvpn3/routing"
-	"github.com/openlawsvpn/go-openvpn3/tun"
+	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/routing"
+	"github.com/openlawsvpn/go-openlawsvpn/tun"
 )
 
 // openNativeTUN is not used on Android — VpnService provides the TUN fd.

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openlawsvpn/go-openvpn3/internal/ctls"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
 )
 
 // generateSelfSigned creates a self-signed CA + leaf cert for testing.
