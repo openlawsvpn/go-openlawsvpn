@@ -58,13 +58,13 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
   env:
     RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
   run: |
-    sudo -E CI=true ovpn3 -relay "$RELAY_TOKEN" 2>/tmp/ovpn3.log &
+    sudo -E CI=true ovpn3 -relay "$RELAY_TOKEN" &>/tmp/ovpn3.log &
     echo $! > /tmp/ovpn3.pid
 
 - name: Wait for tunnel up
   run: |
     for i in $(seq 1 120); do
-      grep -q "OVPN3_TUNNEL_UP\|tunnel up" /tmp/ovpn3.log && break
+      grep -q "OVPN3_TUNNEL_UP" /tmp/ovpn3.log && break
       [ $i -eq 120 ] && { cat /tmp/ovpn3.log; exit 1; }
       sleep 5
     done

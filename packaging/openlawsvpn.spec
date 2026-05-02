@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        19%{?dist}
+Release:        20%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -170,6 +170,12 @@ gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-20
+- relay: CI mode emits OVPN3_TUNNEL_UP to both stdout and stderr
+- ci: GHA workflow captures stdout+stderr (&>/tmp/ovpn3.log) so OVPN3_TUNNEL_UP is always detected
+- relay-endpoint default updated to wss://ws.relay.openlawsvpn.com/ws
+- docs: ci-relay.md usage guide
+
 * Fri May  1 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-19
 - gui: ship openlawsvpn-disconnected/connected SVG icons in hicolor theme
   Fixes generic blue-gear icon in dock and wrong padlock in GNOME launcher

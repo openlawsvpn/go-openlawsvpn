@@ -352,11 +352,13 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		fmt.Fprintf(os.Stderr, "ovpn3: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
 			localIP, client.LocalIP(), payload.RemoteIP)
 
-		// In CI mode print a machine-readable ready line so the next pipeline
-		// step can detect tunnel readiness by polling stdout/stderr.
+		// In CI mode print a machine-readable ready line. Written to both
+		// stdout (for script piping) and stderr (so 2>/log or &>/log both work).
 		if isCI() {
-			fmt.Printf("OVPN3_TUNNEL_UP local=%s vpn=%s endpoint=%s\n",
+			line := fmt.Sprintf("OVPN3_TUNNEL_UP local=%s vpn=%s endpoint=%s",
 				localIP, client.LocalIP(), payload.RemoteIP)
+			fmt.Println(line)
+			fmt.Fprintln(os.Stderr, line)
 		}
 
 		// Notify the relay (and therefore the app) that the tunnel is up.
