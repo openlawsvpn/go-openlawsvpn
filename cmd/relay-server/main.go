@@ -48,7 +48,7 @@ type agentRecord struct {
 	Token      string
 	AgentID    string
 	Hostname   string
-	Status     string // standby | connecting | connected | offline
+	Status     string // standby | connected | offline
 	AssignedIP string
 	ConnID     string // opaque key for the active WS connection
 }
@@ -149,9 +149,6 @@ func (s *store) createSession(token, agentID string) string {
 		AgentID:   agentID,
 		State:     "initiated",
 	}
-	if a, ok := s.agents[agentID]; ok {
-		a.Status = "connecting"
-	}
 	s.mu.Unlock()
 	return sid
 }
@@ -184,6 +181,17 @@ func (s *store) pushToAgent(agentID string, msg []byte) bool {
 	default:
 		return false
 	}
+}
+
+func (s *store) hasActiveSession(agentID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sess := range s.sessions {
+		if sess.AgentID == agentID && (sess.State == "initiated" || sess.State == "phase2") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *store) connChan(connID string) chan []byte {
@@ -257,8 +265,12 @@ func (srv *server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if a.Status != "standby" {
-		http.Error(w, "agent not standby", http.StatusConflict)
+	if a.Status == "offline" {
+		http.Error(w, "agent offline", http.StatusConflict)
+		return
+	}
+	if srv.st.hasActiveSession(body.AgentID) {
+		http.Error(w, "agent has active session", http.StatusConflict)
 		return
 	}
 	sid := srv.st.createSession(body.Token, body.AgentID)
