@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        21%{?dist}
+Release:        22%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -188,6 +188,15 @@ gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-22
+- relay: suppress spurious idle signal that stalled GUI at "Connecting to VPN for Phase 1"
+- relay: handle fragmented WebSocket frames; skip empty keepalive frames
+- gui: fix Cancel button routing — relay Connecting/WaitingSaml states now reach relay screen
+- gui: remove duplicate bottom-bar Cancel button; per-agent row Cancel is the correct UX
+- gui: fix relay default URL (api.relay.openlawsvpn.com, was missing api. subdomain)
+- cli: add -daemon/-pidfile/-logfile flags for background-after-connect mode
+- ci: vpn-integration workflow uses -daemon flag instead of log polling
+
 * Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-21
 - spec: add openlawsvpn-cli subpackage shipping /usr/bin/openlawsvpn-cli
 - rename repo and Go module from go-openvpn3 to go-openlawsvpn
