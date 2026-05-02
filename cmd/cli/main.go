@@ -1,4 +1,4 @@
-// Command ovpn3 is a minimal CLI for the go-openvpn3 VPN client.
+// Command openlawsvpn-cli is a minimal CLI for the go-openvpn3 VPN client.
 //
 // It implements the AWS Client VPN SAML/CRV1 authentication flow and
 // brings up a Linux TUN interface with the routes and DNS pushed by the server.
@@ -6,9 +6,9 @@
 //
 // Usage:
 //
-//	ovpn3 -config <path.ovpn> [-saml-token <base64token>]
-//	ovpn3 -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>] [-hostname <name>]
-//	ovpn3 -relay <token> -config <path.ovpn> [...]   # -config optional in relay mode
+//	openlawsvpn-cli -config <path.ovpn> [-saml-token <base64token>]
+//	openlawsvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>] [-hostname <name>]
+//	openlawsvpn-cli -relay <token> -config <path.ovpn> [...]   # -config optional in relay mode
 //
 // Flags:
 //
@@ -50,12 +50,12 @@
 // Example GitHub Actions step:
 //
 //	- name: Connect VPN
-//	  run: sudo ovpn3 -relay ${{ secrets.RELAY_TOKEN }} &
+//	  run: sudo openlawsvpn-cli -relay ${{ secrets.RELAY_TOKEN }} &
 //	  # Next step runs after tunnel is up (detected via log polling or sleep)
 //
 // Build as a fully static binary:
 //
-//	CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
+//	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 package main
 
 import (
@@ -105,7 +105,7 @@ func main() {
 		if *configPath != "" {
 			fp, err := profile.ParsePath(*configPath)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "ovpn3: parse config: %v\n", err)
+				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
 				os.Exit(1)
 			}
 			fallbackProfile = fp
@@ -120,14 +120,14 @@ func main() {
 	}
 
 	if *configPath == "" {
-		fmt.Fprintln(os.Stderr, "ovpn3: -config flag is required")
+		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: -config flag is required")
 		flag.Usage()
 		os.Exit(1)
 	}
 
 	p, err := profile.ParsePath(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ovpn3: parse config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -137,21 +137,21 @@ func main() {
 	if p.RandomHostname {
 		remoteDesc = "<random>." + p.Remote
 	}
-	fmt.Fprintf(os.Stderr, "ovpn3: connecting to %s:%d (%s)...\n",
+	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connecting to %s:%d (%s)...\n",
 		remoteDesc, p.Port, protoName(p.Proto))
 
 	// Wire up the SAML token callback for AWS SSO profiles.
 	preSuppliedToken := *samlToken
 
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
-		fmt.Printf("ovpn3: SAML authentication required\n")
-		fmt.Printf("ovpn3: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
+		fmt.Printf("openlawsvpn-cli: SAML authentication required\n")
+		fmt.Printf("openlawsvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
 		openBrowser(challenge.URL)
 
 		if preSuppliedToken != "" {
 			tok := preSuppliedToken
 			preSuppliedToken = "" // consume it — re-auth will go through the ACS flow
-			fmt.Fprintf(os.Stderr, "ovpn3: SAML token received (%d chars)\n", len(tok))
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: SAML token received (%d chars)\n", len(tok))
 			return tok, nil
 		}
 
@@ -159,19 +159,19 @@ func main() {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(os.Stderr, "ovpn3: SAML token received (%d chars)\n", len(tok))
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: SAML token received (%d chars)\n", len(tok))
 		return tok, nil
 	}
 
 	if err := client.Connect(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "ovpn3: connect failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: connect failed: %v\n", err)
 		if isPermissionError(err) {
-			fmt.Fprintln(os.Stderr, "ovpn3: hint: TUN device requires root — re-run with sudo")
+			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: hint: TUN device requires root — re-run with sudo")
 		}
 		os.Exit(1)
 	}
 
-	fmt.Fprintf(os.Stderr, "ovpn3: tunnel up — local=%s tun=%s\n",
+	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel up — local=%s tun=%s\n",
 		outboundIP(), client.LocalIP())
 
 	// Wait for signal or server-initiated disconnect (e.g. keepalive timeout).
@@ -180,43 +180,43 @@ func main() {
 		select {
 		case <-ctx.Done():
 			// User pressed Ctrl-C or sent SIGTERM — clean exit.
-			fmt.Fprintln(os.Stderr, "\novpn3: disconnecting...")
+			fmt.Fprintln(os.Stderr, "\nopenlawsvpn-cli: disconnecting...")
 			stop()
 			if err := client.Disconnect(); err != nil {
-				fmt.Fprintf(os.Stderr, "ovpn3: disconnect error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: disconnect error: %v\n", err)
 			}
 			if err := client.WaitForDisconnect(); err != nil {
-				fmt.Fprintf(os.Stderr, "ovpn3: wait error: %v\n", err)
+				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: wait error: %v\n", err)
 			}
-			fmt.Fprintln(os.Stderr, "ovpn3: disconnected")
+			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
 			return
 		case <-client.Done():
 			reason := client.WaitForDisconnect()
 			if reason == nil || ctx.Err() != nil {
 				// Clean disconnect or signal — exit.
-				fmt.Fprintln(os.Stderr, "ovpn3: disconnected")
+				fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
 				return
 			}
 			// Unclean disconnect (dead link, keepalive timeout, etc.) — reconnect.
-			fmt.Fprintf(os.Stderr, "ovpn3: tunnel down (%v), reconnecting...\n", reason)
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel down (%v), reconnecting...\n", reason)
 			if err := client.Reconnect(ctx); err != nil {
 				if ctx.Err() != nil {
-					fmt.Fprintln(os.Stderr, "ovpn3: disconnected")
+					fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
 					return
 				}
 				if errors.Is(err, vpn.ErrReauthRequired) {
 					// SAML session expired — run the full browser flow again.
-					fmt.Fprintln(os.Stderr, "ovpn3: SAML session expired, re-authenticating...")
+					fmt.Fprintln(os.Stderr, "openlawsvpn-cli: SAML session expired, re-authenticating...")
 					if err := client.Connect(ctx); err != nil {
-						fmt.Fprintf(os.Stderr, "ovpn3: re-auth connect failed: %v\n", err)
+						fmt.Fprintf(os.Stderr, "openlawsvpn-cli: re-auth connect failed: %v\n", err)
 						os.Exit(1)
 					}
 				} else {
-					fmt.Fprintf(os.Stderr, "ovpn3: reconnect failed: %v\n", err)
+					fmt.Fprintf(os.Stderr, "openlawsvpn-cli: reconnect failed: %v\n", err)
 					os.Exit(1)
 				}
 			}
-			fmt.Fprintf(os.Stderr, "ovpn3: tunnel up — local=%s tun=%s\n",
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel up — local=%s tun=%s\n",
 				outboundIP(), client.LocalIP())
 		}
 	}
@@ -228,11 +228,11 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge) (string,
 	acs, err := saml.NewACSServer()
 	if err != nil {
 		// ACS port unavailable — fall back to stdin.
-		fmt.Fprintln(os.Stderr, "ovpn3: ACS server unavailable; paste SAMLResponse and press Enter:")
+		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: ACS server unavailable; paste SAMLResponse and press Enter:")
 		return readTokenFromStdin()
 	}
 
-	fmt.Fprintf(os.Stderr, "ovpn3: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
+	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
 	fmt.Fprintln(os.Stderr, "       (or paste SAMLResponse on stdin if the browser cannot reach localhost)")
 
 	_ = challenge // URL already printed by caller
@@ -270,7 +270,7 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge) (string,
 	case err := <-errCh:
 		return "", err
 	case <-ctx.Done():
-		return "", fmt.Errorf("ovpn3: SAML wait cancelled: %w", ctx.Err())
+		return "", fmt.Errorf("openlawsvpn-cli: SAML wait cancelled: %w", ctx.Err())
 	}
 }
 
@@ -280,14 +280,14 @@ func readTokenFromStdin() (string, error) {
 	if scanner.Scan() {
 		tok := scanner.Text()
 		if tok == "" {
-			return "", fmt.Errorf("ovpn3: empty SAMLResponse from stdin")
+			return "", fmt.Errorf("openlawsvpn-cli: empty SAMLResponse from stdin")
 		}
 		return tok, nil
 	}
 	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("ovpn3: read stdin: %w", err)
+		return "", fmt.Errorf("openlawsvpn-cli: read stdin: %w", err)
 	}
-	return "", fmt.Errorf("ovpn3: EOF on stdin before SAMLResponse")
+	return "", fmt.Errorf("openlawsvpn-cli: EOF on stdin before SAMLResponse")
 }
 
 // openBrowser attempts to open url in the system browser using xdg-open.
@@ -324,7 +324,7 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 	var agentPtr *relay.Agent
 
 	cfg.OnPhase2 = func(ctx context.Context, payload relay.Phase2Payload) error {
-		fmt.Fprintf(os.Stderr, "ovpn3: relay: received phase2 for session %s\n", payload.SessionID)
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: received phase2 for session %s\n", payload.SessionID)
 
 		// Payload config takes precedence; fall back to local profile if absent.
 		var connProfile *profile.Profile
@@ -349,7 +349,7 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 			return fmt.Errorf("relay: phase2 connect: %w", err)
 		}
 		localIP := outboundIP()
-		fmt.Fprintf(os.Stderr, "ovpn3: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: tunnel up — local=%s tun=%s vpn-endpoint=%s\n",
 			localIP, client.LocalIP(), payload.RemoteIP)
 
 		// In CI mode print a machine-readable ready line. Written to both
@@ -373,18 +373,18 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 
 	agent, err := relay.New(cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ovpn3: relay: %v\n", err)
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: %v\n", err)
 		os.Exit(1)
 	}
 	agentPtr = agent
 
-	fmt.Fprintf(os.Stderr, "ovpn3: relay mode — agent_id=%s, waiting for app to connect...\n", agent.AgentID())
+	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay mode — agent_id=%s, waiting for app to connect...\n", agent.AgentID())
 
 	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
-		fmt.Fprintf(os.Stderr, "ovpn3: relay: %v\n", err)
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: relay: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stderr, "ovpn3: relay: disconnected")
+	fmt.Fprintln(os.Stderr, "openlawsvpn-cli: relay: disconnected")
 }
 
 // outboundIP returns the machine's preferred outbound IP by opening a UDP

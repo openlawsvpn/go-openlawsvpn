@@ -1,6 +1,6 @@
-# Using ovpn3 relay mode in CI/CD pipelines
+# Using openlawsvpn-cli relay mode in CI/CD pipelines
 
-`ovpn3` relay mode lets a CI runner connect to an internal VPN network
+`openlawsvpn-cli` relay mode lets a CI runner connect to an internal VPN network
 **without storing credentials in the pipeline**. The SAML auth flow runs once
 on the operator's machine; the runner just receives the tunnel credentials via
 the relay.
@@ -12,7 +12,7 @@ the relay.
 ```
 CI runner                    Relay server              Operator's machine
 ──────────                   ─────────────             ──────────────────
-ovpn3 -relay <token>  ──WS──▶  ws.relay.…  ◀──REST──  app: POST /connect
+openlawsvpn-cli -relay <token>  ──WS──▶  ws.relay.…  ◀──REST──  app: POST /connect
        │  waits...                                           POST /session/…/execute
        │                                                     (delivers SAML creds)
        ▼
@@ -31,7 +31,7 @@ automated tool) triggers the connection from the app or API.
 ## CI detection
 
 When the `CI` environment variable is set to any non-empty value other than
-`0` or `false`, `ovpn3` enters CI mode:
+`0` or `false`, `openlawsvpn-cli` enters CI mode:
 
 - Stays connected after Phase 2 (does not exit — keeps the tunnel alive for
   the rest of the job).
@@ -51,15 +51,15 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 ## GitHub Actions example
 
 ```yaml
-- name: Build ovpn3
-  run: CGO_ENABLED=0 go build -o /usr/local/bin/ovpn3 ./cmd/ovpn3
+- name: Build openlawsvpn-cli
+  run: CGO_ENABLED=0 go build -o /usr/local/bin/openlawsvpn-cli ./cmd/cli
 
 - name: Start relay agent
   env:
     RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
   run: |
-    sudo -E CI=true ovpn3 -relay "$RELAY_TOKEN" &>/tmp/ovpn3.log &
-    echo $! > /tmp/ovpn3.pid
+    sudo -E CI=true openlawsvpn-cli -relay "$RELAY_TOKEN" &>/tmp/openlawsvpn-cli.log &
+    echo $! > /tmp/openlawsvpn-cli.pid
 
 - name: Wait for tunnel up
   run: |
@@ -74,7 +74,7 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 
 - name: Disconnect
   if: always()
-  run: sudo kill "$(cat /tmp/ovpn3.pid)" 2>/dev/null || true
+  run: sudo kill "$(cat /tmp/openlawsvpn-cli.pid)" 2>/dev/null || true
 ```
 
 ---
@@ -117,7 +117,7 @@ Use the in-process relay server to test the pipeline without hitting production:
 go run ./cmd/relay-server -addr :18080
 
 # Terminal 2 — CI agent
-CI=true sudo ovpn3 -relay testtoken \
+CI=true sudo openlawsvpn-cli -relay testtoken \
   -relay-endpoint ws://localhost:18080/ws \
   -config tunnel.ovpn
 

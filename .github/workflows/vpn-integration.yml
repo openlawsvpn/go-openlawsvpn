@@ -31,17 +31,17 @@ jobs:
         with:
           go-version: "1.25"
 
-      - name: Build ovpn3
-        run: CGO_ENABLED=0 go build -o /usr/local/bin/ovpn3 ./cmd/ovpn3
+      - name: Build openlawsvpn-cli
+        run: CGO_ENABLED=0 go build -o /usr/local/bin/openlawsvpn-cli ./cmd/cli
 
       - name: Start relay agent (background)
         env:
           RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
         run: |
-          sudo -E CI=true ovpn3 -relay "$RELAY_TOKEN" \
-            &>/tmp/ovpn3.log &
-          echo $! > /tmp/ovpn3.pid
-          echo "relay agent started (pid $(cat /tmp/ovpn3.pid))"
+          sudo -E CI=true openlawsvpn-cli -relay "$RELAY_TOKEN" \
+            &>/tmp/openlawsvpn-cli.log &
+          echo $! > /tmp/openlawsvpn-cli.pid
+          echo "relay agent started (pid $(cat /tmp/openlawsvpn-cli.pid))"
 
       - name: Wait for tunnel up
         timeout-minutes: 10
@@ -84,14 +84,14 @@ jobs:
       - name: Disconnect VPN
         if: always()
         run: |
-          if [ -f /tmp/ovpn3.pid ]; then
-            sudo kill "$(cat /tmp/ovpn3.pid)" 2>/dev/null || true
+          if [ -f /tmp/openlawsvpn-cli.pid ]; then
+            sudo kill "$(cat /tmp/openlawsvpn-cli.pid)" 2>/dev/null || true
           fi
 
       - name: Upload relay agent log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ovpn3-log
+          name: openlawsvpn-cli-log
           path: /tmp/ovpn3.log
           if-no-files-found: ignore

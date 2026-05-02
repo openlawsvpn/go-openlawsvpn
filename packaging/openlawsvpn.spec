@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 Name:           openlawsvpn
 Version:        0.1.0
-Release:        20%{?dist}
+Release:        21%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): BSL-1.1
@@ -38,6 +38,16 @@ Background daemon that manages the VPN tunnel via go-openlawsvpn.
 Runs as a systemd system service under the openlawsvpn user with CAP_NET_ADMIN.
 Exposes com.openlawsvpn.Daemon on the system bus.
 
+%package cli
+Summary:        openlawsvpn CLI
+License:        BSL-1.1
+Requires:       iproute
+
+%description cli
+Headless command-line VPN client for openlawsvpn.
+Supports direct SAML/CRV1 mode and relay mode (-relay <token>).
+Requires CAP_NET_ADMIN — run with sudo or set file capability.
+
 %package gui
 Summary:        openlawsvpn GTK4 GUI
 # GUI binary statically links Rust crates — full license conjunction required.
@@ -67,6 +77,7 @@ cd gui-gtk && %cargo_generate_buildrequires && cd -
 
 %build
 CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-daemon ./cmd/daemon
+CGO_ENABLED=0 go build -o %{_builddir}/openlawsvpn-cli ./cmd/cli
 
 cd gui-gtk
 %cargo_build
@@ -96,6 +107,9 @@ install -Dm644 packaging/com.openlawsvpn.Daemon.service \
 
 install -Dm644 packaging/90-openlawsvpn.preset \
     %{buildroot}%{_presetdir}/90-openlawsvpn.preset
+
+install -Dm755 %{_builddir}/openlawsvpn-cli \
+    %{buildroot}%{_bindir}/openlawsvpn-cli
 
 # Install GUI binary directly from target/rpm/ (non-crate project — do not use %%cargo_install).
 install -Dm755 gui-gtk/target/rpm/openlawsvpn-gui \
@@ -132,6 +146,10 @@ done
 exit 0
 
 # ── Files ─────────────────────────────────────────────────────────────────────
+
+%files cli
+%license LICENSE
+%{_bindir}/openlawsvpn-cli
 
 %files daemon
 %license LICENSE
@@ -170,6 +188,10 @@ gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-21
+- spec: add openlawsvpn-cli subpackage shipping /usr/bin/openlawsvpn-cli
+- rename repo and Go module from go-openvpn3 to go-openlawsvpn
+
 * Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-20
 - relay: CI mode emits OVPN3_TUNNEL_UP to both stdout and stderr
 - ci: GHA workflow captures stdout+stderr (&>/tmp/ovpn3.log) so OVPN3_TUNNEL_UP is always detected

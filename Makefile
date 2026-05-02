@@ -52,14 +52,14 @@ aar-sha256: go-openlawsvpn.aar
 
 ## Build the Linux CLI binary (CGO_ENABLED=0 → fully static)
 cli:
-	CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
+	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 
 ## Build the local relay-server test binary
 relay-server:
 	CGO_ENABLED=0 go build -o relay-server ./cmd/relay-server
 
 ## Start the local relay server for testing (default port 18080, override with RELAY_ADDR)
-## Agent:  ovpn3 -config tunnel.ovpn -relay <token> -relay-endpoint ws://localhost:18080/ws
+## Agent:  openlawsvpn-cli -config tunnel.ovpn -relay <token> -relay-endpoint ws://localhost:18080/ws
 ## App:    set endpoint to http://<host>:18080/api/v1
 RELAY_ADDR ?= :18080
 run-local-relay:
@@ -122,5 +122,5 @@ builddep: srpm
 
 ## Remove build artefacts
 clean:
-	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar ovpn3 relay-server openlawsvpn-daemon openlawsvpn-gui
+	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui
 	rm -rf rpmbuild gui-gtk/target
