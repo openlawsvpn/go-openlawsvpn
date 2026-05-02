@@ -351,14 +351,17 @@ func (w *wsConn) close() {
 	})
 }
 
-// readMessage reads one WebSocket frame and returns its payload.
-// Handles fragmentation, pong replies, and close frames.
+// readMessage reads one complete WebSocket message and returns its payload.
+// Reassembles fragmented messages (FIN=0 frames), handles control frames
+// (ping/pong/close), and skips empty data frames used as keepalives.
 func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
+	var msg []byte    // accumulated message payload across fragments
+	var msgOpcode byte // opcode of the first fragment
+
 	for {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		// Use a 2s polling deadline so ctx cancellation is noticed promptly.
 		w.conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
 
 		header := make([]byte, 2)
@@ -366,13 +369,13 @@ func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			// Timeout just means no data yet — loop and check ctx again.
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 				continue
 			}
 			return nil, fmt.Errorf("relay: read frame header: %w", err)
 		}
 
+		fin := header[0]&0x80 != 0
 		opcode := header[0] & 0x0F
 		payloadLen := int(header[1] & 0x7F)
 
@@ -410,11 +413,29 @@ func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
 		}
 
 		switch opcode {
-		case 0x1, 0x2: // text, binary
-			if len(payload) == 0 {
-				continue // empty frame — server keepalive, ignore
+		case 0x0: // continuation frame
+			msg = append(msg, payload...)
+			if fin {
+				if len(msg) == 0 {
+					msg = nil
+					continue // empty fragmented message — keepalive
+				}
+				result := msg
+				msg = nil
+				msgOpcode = 0
+				_ = msgOpcode
+				return result, nil
 			}
-			return payload, nil
+		case 0x1, 0x2: // text or binary — start of a new message
+			if fin {
+				if len(payload) == 0 {
+					continue // empty single-frame message — keepalive
+				}
+				return payload, nil
+			}
+			// First fragment: save opcode, accumulate payload.
+			msgOpcode = opcode
+			msg = append(msg[:0], payload...)
 		case 0x8: // close
 			return nil, fmt.Errorf("relay: server closed connection")
 		case 0x9: // ping — reply with pong

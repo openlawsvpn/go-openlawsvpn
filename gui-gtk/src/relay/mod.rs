@@ -49,7 +49,6 @@ pub struct RelayScreen {
     agents_scroll: ScrolledWindow,
     status_label: Label,
     spinner: Spinner,
-    cancel_btn: Button,
     busy: Rc<RefCell<bool>>,
 }
 
@@ -153,11 +152,6 @@ impl RelayScreen {
         status_label.set_wrap(true);
         status_row.append(&status_label);
 
-        let cancel_btn = Button::with_label("Cancel");
-        cancel_btn.set_css_classes(&["pill"]);
-        cancel_btn.set_visible(false);
-        status_row.append(&cancel_btn);
-
         content.append(&status_row);
 
         let screen = Rc::new(RefCell::new(Self {
@@ -172,7 +166,6 @@ impl RelayScreen {
             agents_scroll,
             status_label,
             spinner,
-            cancel_btn: cancel_btn.clone(),
             busy: Rc::new(RefCell::new(false)),
         }));
 
@@ -195,17 +188,6 @@ impl RelayScreen {
                 sc.borrow().settings.replace(new_settings.clone());
                 new_settings.save();
                 sc.borrow().refresh_agents();
-            });
-        }
-
-        // Cancel button
-        {
-            let sc = screen.clone();
-            cancel_btn.connect_clicked(move |_| {
-                let vpn = sc.borrow().vpn.clone();
-                glib::spawn_future_local(async move {
-                    vpn.cmd_tx.send(VpnCommand::Disconnect).await.ok();
-                });
             });
         }
 
@@ -239,40 +221,38 @@ impl RelayScreen {
         use crate::vpn_service::VpnState;
         match state {
             VpnState::Connecting => {
-                self.set_busy(true, "Connecting to VPN for Phase 1…", true);
+                self.set_busy(true, "Connecting to VPN for Phase 1…");
             }
             VpnState::WaitingSaml { .. } => {
-                self.set_busy(true, "Waiting for SAML login…", true);
+                self.set_busy(true, "Waiting for SAML login…");
             }
             VpnState::RelayDelivering { .. } => {
-                self.set_busy(true, "Delivering credentials to agent…", true);
+                self.set_busy(true, "Delivering credentials to agent…");
             }
             VpnState::RelayConnected { agent_id } => {
-                self.set_busy(false, &format!("Agent {} tunnel is up.", agent_id), false);
+                self.set_busy(false, &format!("Agent {} tunnel is up.", agent_id));
                 self.refresh_agents();
             }
             VpnState::Error(msg) => {
-                self.set_busy(false, &format!("Error: {}", msg), false);
+                self.set_busy(false, &format!("Error: {}", msg));
                 let toast = Toast::new(&format!("Relay error: {}", msg));
                 self.toast_overlay.add_toast(toast);
                 self.refresh_agents();
             }
             VpnState::Idle => {
-                self.set_busy(false, "", false);
+                self.set_busy(false, "");
                 self.refresh_agents();
             }
             _ => {}
         }
     }
 
-    fn set_busy(&self, busy: bool, msg: &str, show_cancel: bool) {
+    fn set_busy(&self, busy: bool, msg: &str) {
         *self.busy.borrow_mut() = busy;
         self.spinner.set_visible(busy);
         if busy { self.spinner.start(); } else { self.spinner.stop(); }
-        self.cancel_btn.set_visible(show_cancel);
         self.status_label.set_text(msg);
         self.status_label.set_visible(!msg.is_empty());
-        // Disable agent rows while busy
         self.rebuild_agent_rows();
     }
 
