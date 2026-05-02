@@ -60,7 +60,7 @@ func main() {
 	configPath     := flag.String("config", "", "path to .ovpn profile file (required)")
 	samlToken      := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
 	relayToken     := flag.String("relay", "", "organisation token — enables relay mode")
-	relayEndpoint  := flag.String("relay-endpoint", "wss://relay.openlawsvpn.com/ws", "relay WebSocket URL")
+	relayEndpoint  := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com/ws", "relay WebSocket URL")
 	relayAgentID   := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
 	relayHostname  := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
 	flag.Parse()

@@ -79,7 +79,7 @@ func TestConnectBusy(t *testing.T) {
 	svc.client = &vpn.Client{}
 	svc.mu.Unlock()
 
-	dbusErr := svc.Connect("/nonexistent.ovpn")
+	dbusErr := svc.Connect("/nonexistent.ovpn", "")
 	if dbusErr == nil {
 		t.Fatal("expected D-Bus error when already connected, got nil")
 	}
@@ -91,7 +91,7 @@ func TestConnectBusy(t *testing.T) {
 // TestConnectBadProfile verifies that an invalid .ovpn path returns InvalidProfile.
 func TestConnectBadProfile(t *testing.T) {
 	svc := &DaemonService{state: vpn.StateIdle}
-	dbusErr := svc.Connect("/definitely/does/not/exist.ovpn")
+	dbusErr := svc.Connect("/definitely/does/not/exist.ovpn", "")
 	if dbusErr == nil {
 		t.Fatal("expected D-Bus error for missing profile, got nil")
 	}
@@ -111,7 +111,7 @@ func TestDisconnectIdempotent(t *testing.T) {
 // TestStatusIdle verifies Status returns "idle" with empty IPs when nothing is connected.
 func TestStatusIdle(t *testing.T) {
 	svc := &DaemonService{state: vpn.StateIdle}
-	st, serverIP, assignedIP, dbusErr := svc.Status()
+	st, serverIP, assignedIP, _, dbusErr := svc.Status()
 	if dbusErr != nil {
 		t.Fatalf("Status: %v", dbusErr)
 	}
@@ -181,7 +181,7 @@ func TestSessionBusIntegration(t *testing.T) {
 	defer conn.Close()
 
 	svc := newDaemonService(conn)
-	st, _, _, dbusErr := svc.Status()
+	st, _, _, _, dbusErr := svc.Status()
 	if dbusErr != nil {
 		t.Fatalf("Status: %v", dbusErr)
 	}

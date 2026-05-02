@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	relayDefaultBase = "https://relay.openlawsvpn.com/api/v1"
+	relayDefaultBase = "https://api.relay.openlawsvpn.com/api/v1"
 	relayHTTPTimeout = 15 * time.Second
 )
 
