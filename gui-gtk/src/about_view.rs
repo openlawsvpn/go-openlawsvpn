@@ -48,12 +48,12 @@ impl AboutView {
                 "AWS Client VPN client with SAML/SSO support.\n\
                  Pure Go protocol engine — no C++ runtime required.",
             );
-            dialog.set_website("https://github.com/openlawsvpn/go-openvpn3");
+            dialog.set_website("https://github.com/openlawsvpn/go-openlawsvpn");
             dialog.set_license_type(gtk4::License::Lgpl21);
             dialog.set_developers(&["openlawsvpn contributors"]);
             dialog.add_legal_section(
-                "go-openvpn3",
-                Some("BSL-1.1 — https://github.com/openlawsvpn/go-openvpn3"),
+                "go-openlawsvpn",
+                Some("BSL-1.1 — https://github.com/openlawsvpn/go-openlawsvpn"),
                 gtk4::License::Custom,
                 None,
             );

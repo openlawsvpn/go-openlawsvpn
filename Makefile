@@ -1,7 +1,7 @@
 NDK_VERSION      := 30.0.14904198
 ANDROID_API      := 31
 ANDROID_SDK_HOME ?= $(HOME)/Android/Sdk
-MODULE           := github.com/openlawsvpn/go-openvpn3
+MODULE           := github.com/openlawsvpn/go-openlawsvpn
 VERSION          ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 GOPATH           ?= $(shell go env GOPATH)
 
@@ -27,9 +27,9 @@ SPEC         := packaging/openlawsvpn.spec
 all: aar
 
 ## Build the Android .aar
-aar: go-openvpn3.aar
+aar: go-openlawsvpn.aar
 
-go-openvpn3.aar:
+go-openlawsvpn.aar:
 	@command -v gomobile >/dev/null 2>&1 || { \
 	  echo "gomobile not found — run: go install golang.org/x/mobile/cmd/gomobile@latest && gomobile init"; \
 	  exit 1; \
@@ -40,15 +40,15 @@ go-openvpn3.aar:
 	  exit 1; \
 	}
 	ANDROID_NDK_HOME=$(ANDROID_NDK_HOME) gomobile bind -v \
-	  -o go-openvpn3.aar \
+	  -o go-openlawsvpn.aar \
 	  -target android \
 	  -androidapi $(ANDROID_API) \
 	  -ldflags "-X $(MODULE).Version=$(VERSION)" \
 	  $(MODULE)
 
 ## Compute SHA-256 checksum alongside the .aar
-aar-sha256: go-openvpn3.aar
-	sha256sum go-openvpn3.aar > go-openvpn3.aar.sha256
+aar-sha256: go-openlawsvpn.aar
+	sha256sum go-openlawsvpn.aar > go-openlawsvpn.aar.sha256
 
 ## Build the Linux CLI binary (CGO_ENABLED=0 → fully static)
 cli:
@@ -122,5 +122,5 @@ builddep: srpm
 
 ## Remove build artefacts
 clean:
-	rm -f go-openvpn3.aar go-openvpn3.aar.sha256 go-openvpn3-sources.jar ovpn3 relay-server openlawsvpn-daemon openlawsvpn-gui
+	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar ovpn3 relay-server openlawsvpn-daemon openlawsvpn-gui
 	rm -rf rpmbuild gui-gtk/target
