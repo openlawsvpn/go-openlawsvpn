@@ -24,7 +24,7 @@
 //	-relay           Organisation token for relay mode.  When set, the CLI connects
 //	                 to the relay WebSocket and waits for the mobile/desktop app to
 //	                 deliver credentials; Phase 1 and SAML run on the app, not here.
-//	-relay-endpoint  Relay WebSocket URL (default: wss://ws.relay.openlawsvpn.com/ws).
+//	-relay-endpoint  Relay WebSocket URL (default: wss://ws.relay.openlawsvpn.com).
 //	-agent-id        Stable UUID for this agent (default: random, changes on restart).
 //	-hostname        Human-readable label shown in the app (default: os.Hostname).
 //
@@ -81,7 +81,7 @@ func main() {
 	configPath     := flag.String("config", "", "path to .ovpn profile file (required)")
 	samlToken      := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
 	relayToken     := flag.String("relay", "", "organisation token — enables relay mode")
-	relayEndpoint  := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com/ws", "relay WebSocket URL")
+	relayEndpoint  := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
 	relayAgentID   := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
 	relayHostname  := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
 	flag.Parse()

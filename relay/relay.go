@@ -13,7 +13,7 @@
 //	agent, err := relay.New(relay.Config{
 //	    Token:    "kjewoijo23823",
 //	    Hostname: "build-runner-42",
-//	    Endpoint: "wss://relay.openlawsvpn.com/ws",
+//	    Endpoint: "wss://ws.relay.openlawsvpn.com",
 //	    OnPhase2: func(ctx context.Context, p relay.Phase2Payload) error {
 //	        // p contains everything needed to call connectPhase2
 //	        return runVPN(ctx, p)
@@ -56,7 +56,7 @@ type Config struct {
 	// AgentID is a stable UUID identifying this agent across reconnects.
 	// If empty, a random one is generated and retained for the lifetime of this Agent.
 	AgentID string
-	// Endpoint is the relay WebSocket URL, e.g. "wss://relay.openlawsvpn.com/ws".
+	// Endpoint is the relay WebSocket URL, e.g. "wss://ws.relay.openlawsvpn.com".
 	Endpoint string
 	// OnPhase2 is called with the credential payload when the relay delivers one.
 	// It should block until the VPN tunnel is established (or fails).

@@ -91,7 +91,7 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 
 | Use | URL |
 |---|---|
-| Agent WebSocket | `wss://ws.relay.openlawsvpn.com/ws` |
+| Agent WebSocket | `wss://ws.relay.openlawsvpn.com` |
 | App REST API | `https://api.relay.openlawsvpn.com/api/v1` |
 
 ---
@@ -101,7 +101,7 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 | Flag | Default | Description |
 |---|---|---|
 | `-relay <token>` | — | Org token; enables relay mode |
-| `-relay-endpoint <url>` | `wss://ws.relay.openlawsvpn.com/ws` | Override WS endpoint (e.g. for local testing) |
+| `-relay-endpoint <url>` | `wss://ws.relay.openlawsvpn.com` | Override WS endpoint (e.g. for local testing) |
 | `-agent-id <uuid>` | random | Stable ID across reconnects; persist across runs for a fixed agent label |
 | `-hostname <name>` | `os.Hostname()` | Label shown in the app agent list |
 | `-config <path>` | — | Fallback .ovpn profile (optional — app always sends config in payload) |
