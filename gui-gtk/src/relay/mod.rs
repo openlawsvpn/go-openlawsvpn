@@ -49,6 +49,7 @@ pub struct RelayScreen {
     agents_scroll: ScrolledWindow,
     status_label: Label,
     spinner: Spinner,
+    disconnect_btn: Button,
     busy: Rc<RefCell<bool>>,
 }
 
@@ -152,6 +153,11 @@ impl RelayScreen {
         status_label.set_wrap(true);
         status_row.append(&status_label);
 
+        let disconnect_btn = Button::with_label("Disconnect");
+        disconnect_btn.set_css_classes(&["pill", "destructive-action"]);
+        disconnect_btn.set_visible(false);
+        status_row.append(&disconnect_btn);
+
         content.append(&status_row);
 
         let screen = Rc::new(RefCell::new(Self {
@@ -166,6 +172,7 @@ impl RelayScreen {
             agents_scroll,
             status_label,
             spinner,
+            disconnect_btn: disconnect_btn.clone(),
             busy: Rc::new(RefCell::new(false)),
         }));
 
@@ -188,6 +195,17 @@ impl RelayScreen {
                 sc.borrow().settings.replace(new_settings.clone());
                 new_settings.save();
                 sc.borrow().refresh_agents();
+            });
+        }
+
+        // Disconnect button
+        {
+            let sc = screen.clone();
+            disconnect_btn.connect_clicked(move |_| {
+                let vpn = sc.borrow().vpn.clone();
+                glib::spawn_future_local(async move {
+                    vpn.cmd_tx.send(VpnCommand::Disconnect).await.ok();
+                });
             });
         }
 
@@ -231,16 +249,19 @@ impl RelayScreen {
             }
             VpnState::RelayConnected { agent_id } => {
                 self.set_busy(false, &format!("Agent {} tunnel is up.", agent_id));
+                self.disconnect_btn.set_visible(true);
                 self.refresh_agents();
             }
             VpnState::Error(msg) => {
                 self.set_busy(false, &format!("Error: {}", msg));
+                self.disconnect_btn.set_visible(false);
                 let toast = Toast::new(&format!("Relay error: {}", msg));
                 self.toast_overlay.add_toast(toast);
                 self.refresh_agents();
             }
             VpnState::Idle => {
                 self.set_busy(false, "");
+                self.disconnect_btn.set_visible(false);
                 self.refresh_agents();
             }
             _ => {}
