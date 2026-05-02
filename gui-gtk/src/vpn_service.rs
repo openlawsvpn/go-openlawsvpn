@@ -345,10 +345,15 @@ async fn handle_connect_relay(
             Some(sig) = state_stream.next() => {
                 if let Ok(args) = sig.args() {
                     let state = parse_relay_state(args.state, args.server_ip);
+                    // Only relay_connected and error are terminal in a relay flow.
+                    // Idle can arrive from the VPN client teardown after Phase 1
+                    // context cancel — ignore it and wait for relay_connected.
                     let terminal = matches!(state,
-                        VpnState::Idle | VpnState::Error(_) | VpnState::RelayConnected { .. }
+                        VpnState::Error(_) | VpnState::RelayConnected { .. }
                     );
-                    emit_state(event_tx, state, config_path.clone());
+                    if !matches!(state, VpnState::Idle) {
+                        emit_state(event_tx, state, config_path.clone());
+                    }
                     if terminal { return; }
                 }
             }

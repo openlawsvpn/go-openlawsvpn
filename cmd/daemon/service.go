@@ -238,10 +238,23 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 	d.profilePath = profilePath
 	d.mu.Unlock()
 
+	// suppressVpnSignals is set to true once we have the SAML token and cancel
+	// the Phase 1 context. The resulting idle/disconnecting signals from the VPN
+	// client must not reach the GUI — it should only see relay-specific states.
+	var suppressVpnSignals bool
+	var suppressMu sync.Mutex
+
 	client.EventFn = func(e vpn.Event) {
 		switch e.Type {
 		case vpn.EventStateChanged:
 			log.Printf("relay state: %s serverIP=%q msg=%q", e.State, e.ServerIP, e.Message)
+			suppressMu.Lock()
+			suppress := suppressVpnSignals
+			suppressMu.Unlock()
+			if suppress {
+				log.Printf("relay: suppressing VPN state signal %q after context cancel", e.State)
+				return
+			}
 			d.mu.Lock()
 			d.state = e.State
 			d.mu.Unlock()
@@ -322,7 +335,10 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 		var cap samlCapture
 		select {
 		case cap = <-captured:
-			// Token captured — cancel Phase 2 on our side immediately.
+			// Suppress idle/disconnecting signals fired when we cancel Phase 1.
+			suppressMu.Lock()
+			suppressVpnSignals = true
+			suppressMu.Unlock()
 			cancel()
 			// Drain the phase1Done error (context cancelled — expected).
 			<-phase1Done
