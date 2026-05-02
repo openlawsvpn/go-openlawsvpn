@@ -27,6 +27,28 @@
 //	-relay-endpoint  Relay WebSocket URL (default: wss://ws.relay.openlawsvpn.com).
 //	-agent-id        Stable UUID for this agent (default: random, changes on restart).
 //	-hostname        Human-readable label shown in the app (default: os.Hostname).
+//	-daemon          Fork to background after the tunnel is up; foreground process
+//	                 exits 0 once the VPN is established, 1 on failure.
+//	-pidfile         Write the daemon PID to this file (only used with -daemon).
+//	-logfile         Redirect daemon stdout+stderr to this file (only with -daemon;
+//	                 default: /dev/null).
+//
+// # Daemon mode
+//
+// With -daemon the CLI daemonizes after the tunnel is established:
+//
+//   - The foreground process blocks until the VPN is up, then prints the daemon PID
+//     and exits 0.  The shell prompt / CI step returns immediately.
+//   - The background process keeps the tunnel alive, handling reconnects and rekeying.
+//   - Use -pidfile to record the PID for later cleanup (sudo kill $(cat pidfile)).
+//   - Use -logfile to capture background diagnostics.
+//
+// Example:
+//
+//	sudo openlawsvpn-cli -relay $TOKEN -daemon \
+//	  -pidfile /tmp/openlawsvpn.pid \
+//	  -logfile /tmp/openlawsvpn.log
+//	# returns once the tunnel is up; VPN runs in background
 //
 // # CI / headless mode
 //
@@ -47,12 +69,6 @@
 //     credentials — it stays connected and forwards the "tunnel up" line so the
 //     next pipeline step can proceed.
 //
-// Example GitHub Actions step:
-//
-//	- name: Connect VPN
-//	  run: sudo openlawsvpn-cli -relay ${{ secrets.RELAY_TOKEN }} &
-//	  # Next step runs after tunnel is up (detected via log polling or sleep)
-//
 // Build as a fully static binary:
 //
 //	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
@@ -68,6 +84,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -78,13 +95,37 @@ import (
 )
 
 func main() {
-	configPath     := flag.String("config", "", "path to .ovpn profile file (required)")
-	samlToken      := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
-	relayToken     := flag.String("relay", "", "organisation token — enables relay mode")
-	relayEndpoint  := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
-	relayAgentID   := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
-	relayHostname  := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
+	configPath    := flag.String("config", "", "path to .ovpn profile file (required)")
+	samlToken     := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
+	relayToken    := flag.String("relay", "", "organisation token — enables relay mode")
+	relayEndpoint := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
+	relayAgentID  := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
+	relayHostname := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
+	daemonMode    := flag.Bool("daemon", false, "fork to background once the tunnel is up")
+	pidFile       := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
+	logFile       := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
+	browserCmd    := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
 	flag.Parse()
+
+	// Daemon re-exec: when OPENLAWSVPN_READY_FD is set, we are the background
+	// child. All flags are inherited via os.Args. We notify the parent through
+	// the pipe FD once the tunnel is up, then continue running indefinitely.
+	readyFD := 0
+	if v := os.Getenv("OPENLAWSVPN_READY_FD"); v != "" {
+		fd, err := strconv.Atoi(v)
+		if err != nil || fd <= 2 {
+			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: invalid OPENLAWSVPN_READY_FD")
+			os.Exit(1)
+		}
+		readyFD = fd
+	}
+
+	if *daemonMode && readyFD == 0 {
+		// Foreground parent: create a pipe, re-exec self as background child
+		// passing the write-end FD, then block until the child signals ready.
+		spawnDaemon(*pidFile, *logFile)
+		return
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -115,7 +156,7 @@ func main() {
 			Hostname: hostname,
 			AgentID:  *relayAgentID,
 			Endpoint: *relayEndpoint,
-		})
+		}, readyFD)
 		return
 	}
 
@@ -146,7 +187,7 @@ func main() {
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
 		fmt.Printf("openlawsvpn-cli: SAML authentication required\n")
 		fmt.Printf("openlawsvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
-		openBrowser(challenge.URL)
+		openBrowser(challenge.URL, *browserCmd)
 
 		if preSuppliedToken != "" {
 			tok := preSuppliedToken
@@ -155,7 +196,7 @@ func main() {
 			return tok, nil
 		}
 
-		tok, err := waitForSAMLToken(ctx, challenge)
+		tok, err := waitForSAMLToken(ctx, challenge, *browserCmd)
 		if err != nil {
 			return "", err
 		}
@@ -171,8 +212,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	local := outboundIP()
 	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel up — local=%s tun=%s\n",
-		outboundIP(), client.LocalIP())
+		local, client.LocalIP())
+	notifyReady(readyFD, local)
 
 	// Wait for signal or server-initiated disconnect (e.g. keepalive timeout).
 	// If the disconnect was caused by a dead link, attempt to reconnect.
@@ -222,9 +265,11 @@ func main() {
 	}
 }
 
-// waitForSAMLToken starts the ACS server to catch the browser callback, then
-// falls back to reading the token from stdin if the user prefers to paste it.
-func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
+// waitForSAMLToken starts the ACS server to catch the browser callback.
+// While waiting, pressing Enter reprints the URL and reopens the browser
+// (useful when the link was opened in the wrong browser). A non-empty line
+// is treated as a pasted SAMLResponse token (fallback for SSH/headless use).
+func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserCmd string) (string, error) {
 	acs, err := saml.NewACSServer()
 	if err != nil {
 		// ACS port unavailable — fall back to stdin.
@@ -233,11 +278,8 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge) (string,
 	}
 
 	fmt.Fprintf(os.Stderr, "openlawsvpn-cli: waiting for SAML callback on 127.0.0.1:%d\n", saml.ACSPort)
-	fmt.Fprintln(os.Stderr, "       (or paste SAMLResponse on stdin if the browser cannot reach localhost)")
+	fmt.Fprintln(os.Stderr, "       Press Enter to reopen the URL in your browser, or paste SAMLResponse to skip the browser")
 
-	_ = challenge // URL already printed by caller
-
-	// Run ACS and stdin reader concurrently; first one wins.
 	tokenCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
@@ -250,17 +292,21 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge) (string,
 		tokenCh <- tok
 	}()
 
-	// Also accept token from stdin (useful in SSH/headless environments).
+	// Stdin loop: empty Enter = reopen URL, non-empty = pasted token.
 	go func() {
 		scanner := bufio.NewScanner(os.Stdin)
-		if scanner.Scan() {
+		for scanner.Scan() {
 			line := scanner.Text()
-			if line != "" {
-				select {
-				case tokenCh <- line:
-				default:
-				}
+			if line == "" {
+				fmt.Fprintf(os.Stderr, "\nopenlawsvpn-cli: reopening URL...\n  %s\n\n", challenge.URL)
+				openBrowser(challenge.URL, browserCmd)
+				continue
 			}
+			select {
+			case tokenCh <- line:
+			default:
+			}
+			return
 		}
 	}()
 
@@ -290,10 +336,14 @@ func readTokenFromStdin() (string, error) {
 	return "", fmt.Errorf("openlawsvpn-cli: EOF on stdin before SAMLResponse")
 }
 
-// openBrowser attempts to open url in the system browser using xdg-open.
+// openBrowser opens url in the specified browser (or xdg-open if empty).
 // Failure is silently ignored — the user can always open the URL manually.
-func openBrowser(url string) {
-	cmd := exec.Command("xdg-open", url)
+func openBrowser(url, browserCmd string) {
+	bin := "xdg-open"
+	if browserCmd != "" {
+		bin = browserCmd
+	}
+	cmd := exec.Command(bin, url)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err == nil {
@@ -316,7 +366,7 @@ func isPermissionError(err error) bool {
 // Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
 // runRelayMode starts the relay agent. fallback may be nil — the app always sends
 // ovpn_config in the phase2 payload, so a local profile is not required.
-func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Config) {
+func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Config, readyFD int) {
 	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
 
 	// agentPtr is set just after relay.New returns so the OnPhase2 closure can
@@ -361,6 +411,8 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 			fmt.Fprintln(os.Stderr, line)
 		}
 
+		notifyReady(readyFD, localIP)
+
 		// Notify the relay (and therefore the app) that the tunnel is up.
 		if agentPtr != nil {
 			agentPtr.SendStatus(ctx, payload.SessionID, "connected", localIP)
@@ -404,6 +456,93 @@ func outboundIP() string {
 func isCI() bool {
 	v := os.Getenv("CI")
 	return v != "" && v != "0" && v != "false"
+}
+
+// spawnDaemon re-execs the current binary in the background, waits for the
+// child to signal "tunnel up" via a pipe, then exits the foreground process.
+//
+// Strategy: re-exec (not fork) so the Go runtime starts fresh in the child
+// without inheriting goroutines, mutexes, or half-open file descriptors.
+// The write-end of a pipe is passed to the child via an extra FD (> 2) and
+// the OPENLAWSVPN_READY_FD env var. Once the child calls notifyReady(), it
+// writes "ok\n" and closes the FD; the parent unblocks and exits 0.
+func spawnDaemon(pidFile, logFile string) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: daemon pipe: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Choose the log destination for the child.
+	var childOut *os.File
+	if logFile != "" {
+		childOut, err = os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: open logfile: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		childOut, err = os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: open /dev/null: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: resolve executable: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Pass write-end as FD 3 in the child.
+	child := exec.Command(self, os.Args[1:]...)
+	child.Stdout = childOut
+	child.Stderr = childOut
+	child.Stdin = nil
+	child.ExtraFiles = []*os.File{w} // becomes FD 3 in child (ExtraFiles[0] → fd 3)
+	child.Env = append(os.Environ(), "OPENLAWSVPN_READY_FD=3")
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true} // detach from terminal
+
+	if err := child.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: spawn daemon: %v\n", err)
+		os.Exit(1)
+	}
+	// Close write-end in parent so a child crash causes the pipe to close.
+	w.Close()
+	childOut.Close()
+
+	if pidFile != "" {
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)+"\n"), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: write pidfile: %v\n", err)
+		}
+	}
+
+	// Block until the child writes "ok\n" or closes the pipe (error/crash).
+	buf := make([]byte, 64)
+	n, _ := r.Read(buf)
+	r.Close()
+
+	if n == 0 || !strings.HasPrefix(string(buf[:n]), "ok") {
+		fmt.Fprintln(os.Stderr, "openlawsvpn-cli: daemon failed to establish tunnel")
+		child.Process.Kill() //nolint:errcheck
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stdout, "openlawsvpn-cli: daemon started (pid %d)\n", child.Process.Pid)
+	// Detach — let the child continue.
+	os.Exit(0)
+}
+
+// notifyReady signals the parent foreground process (if any) that the tunnel is
+// up. readyFD is 0 when not in daemon mode, in which case this is a no-op.
+func notifyReady(readyFD int, localIP string) {
+	if readyFD == 0 {
+		return
+	}
+	f := os.NewFile(uintptr(readyFD), "ready-pipe")
+	fmt.Fprintf(f, "ok local=%s\n", localIP)
+	f.Close()
 }
 
 // protoName returns a human-readable protocol string.

@@ -34,31 +34,17 @@ jobs:
       - name: Build openlawsvpn-cli
         run: CGO_ENABLED=0 go build -o /usr/local/bin/openlawsvpn-cli ./cmd/cli
 
-      - name: Start relay agent (background)
+      - name: Start relay agent (blocks until tunnel is up, then daemonizes)
+        timeout-minutes: 10
         env:
           RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
         run: |
-          sudo -E CI=true openlawsvpn-cli -relay "$RELAY_TOKEN" \
-            &>/tmp/openlawsvpn-cli.log &
-          echo $! > /tmp/openlawsvpn-cli.pid
-          echo "relay agent started (pid $(cat /tmp/openlawsvpn-cli.pid))"
-
-      - name: Wait for tunnel up
-        timeout-minutes: 10
-        run: |
-          echo "Waiting for OVPN3_TUNNEL_UP..."
-          for i in $(seq 1 120); do
-            if grep -q "OVPN3_TUNNEL_UP" /tmp/openlawsvpn-cli.log 2>/dev/null; then
-              echo "Tunnel is up (attempt $i)"
-              break
-            fi
-            if [ $i -eq 120 ]; then
-              echo "ERROR: tunnel did not come up within 10 minutes"
-              cat /tmp/openlawsvpn-cli.log
-              exit 1
-            fi
-            sleep 5
-          done
+          sudo -E openlawsvpn-cli \
+            -relay "$RELAY_TOKEN" \
+            -daemon \
+            -pidfile /tmp/openlawsvpn-cli.pid \
+            -logfile /tmp/openlawsvpn-cli.log
+          echo "Tunnel is up (daemon pid $(cat /tmp/openlawsvpn-cli.pid))"
 
       - name: Check internal service health
         run: |

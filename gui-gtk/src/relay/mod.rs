@@ -390,6 +390,19 @@ impl RelayScreen {
                             }).await.ok();
                         });
                     });
+                } else if agent.status == "connecting" {
+                    let cancel_btn = Button::with_label("Cancel");
+                    cancel_btn.set_css_classes(&["destructive-action", "pill"]);
+                    cancel_btn.set_valign(gtk4::Align::Center);
+                    row.add_suffix(&cancel_btn);
+
+                    let vpn_c = vpn.clone();
+                    cancel_btn.connect_clicked(move |_| {
+                        let tx = vpn_c.cmd_tx.clone();
+                        glib::spawn_future_local(async move {
+                            tx.send(VpnCommand::Disconnect).await.ok();
+                        });
+                    });
                 }
 
                 list.append(&row);

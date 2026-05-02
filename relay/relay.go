@@ -411,6 +411,9 @@ func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
 
 		switch opcode {
 		case 0x1, 0x2: // text, binary
+			if len(payload) == 0 {
+				continue // empty frame — server keepalive, ignore
+			}
 			return payload, nil
 		case 0x8: // close
 			return nil, fmt.Errorf("relay: server closed connection")

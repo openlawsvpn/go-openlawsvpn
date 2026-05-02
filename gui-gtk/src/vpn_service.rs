@@ -14,6 +14,9 @@ pub enum VpnEvent {
     StateChanged { state: VpnState, profile_path: String },
     LogLine(String),
     StatsUpdate { bytes_sent: u64, bytes_recv: u64, uptime_secs: u64 },
+    /// Emitted immediately before a relay ConnectRelay call so the UI can route
+    /// subsequent Connecting/WaitingSaml states to the relay screen.
+    RelayFlowStarted,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +153,7 @@ fn service_thread(
                     handle_connect(&dbus_conn, &event_tx, config_path, config_content, &mut cmd_rx).await;
                 }
                 VpnCommand::ConnectRelay { config_path, config_content, agent_id, org_token, relay_url } => {
+                    event_tx.unbounded_send(VpnEvent::RelayFlowStarted).ok();
                     handle_connect_relay(
                         &dbus_conn, &event_tx,
                         config_path, config_content, agent_id, org_token, relay_url,

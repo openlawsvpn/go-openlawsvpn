@@ -32,7 +32,7 @@ cd gui-gtk && cargo build --release
 ./target/release/openlawsvpn-gui
 
 # Linux CLI (direct, no daemon)
-CGO_ENABLED=0 go build -o ovpn3 ./cmd/ovpn3
+CGO_ENABLED=0 go build -o ovpn3 ./cmd/cli
 sudo ./ovpn3 -config your.ovpn
 
 # Android .aar (requires gomobile + Android NDK)

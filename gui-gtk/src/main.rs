@@ -181,15 +181,26 @@ fn build_ui(app: &Application) {
     // ── VPN event loop ───────────────────────────────────────────────────────
     let mut event_rx = vpn.take_event_rx();
 
+    // Track whether the current session was initiated from the relay screen,
+    // so Connecting/WaitingSaml states are routed there (not to connection screen).
+    let in_relay_flow = Rc::new(RefCell::new(false));
+
     glib::spawn_future_local(async move {
         while let Some(event) = event_rx.next().await {
             match event {
                 VpnEvent::StateChanged { ref state, ref profile_path } => {
-                    // Relay states are handled by the relay screen, not the
-                    // connection screen.
-                    let is_relay = matches!(state,
+                    // Relay-specific states always belong to the relay screen.
+                    // Connecting/WaitingSaml are also relay-owned when a relay
+                    // session is active.
+                    let is_relay_specific = matches!(state,
                         VpnState::RelayDelivering { .. } | VpnState::RelayConnected { .. }
                     );
+                    if is_relay_specific {
+                        *in_relay_flow.borrow_mut() = true;
+                    } else if matches!(state, VpnState::Idle | VpnState::Error(_)) {
+                        *in_relay_flow.borrow_mut() = false;
+                    }
+                    let is_relay = is_relay_specific || *in_relay_flow.borrow();
                     // Open browser for SAML — applies to both local and relay flows.
                     if let VpnState::WaitingSaml { ref saml_url } = state {
                         if !saml_url.is_empty() {
@@ -221,6 +232,10 @@ fn build_ui(app: &Application) {
                         let ui_state = vpn_state_to_ui(state);
                         connection_screen.borrow_mut().set_state(ui_state, profile_path.clone());
                     }
+                }
+                VpnEvent::RelayFlowStarted => {
+                    *in_relay_flow.borrow_mut() = true;
+                    relay_screen.borrow().set_relay_state(&VpnState::Connecting);
                 }
                 VpnEvent::LogLine(line) => {
                     log_view.append_line(&line);

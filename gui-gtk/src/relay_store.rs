@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const DEFAULT_RELAY_URL: &str = "https://relay.openlawsvpn.com/api/v1";
+pub const DEFAULT_RELAY_URL: &str = "https://api.relay.openlawsvpn.com/api/v1";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RelaySettings {
