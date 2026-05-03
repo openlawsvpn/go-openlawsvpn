@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.2
+Version:        1.0.3
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -194,6 +194,9 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May  4 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.3-1
+- ci: release workflow — static Linux CLI binaries (amd64/arm64/ppc64le) attached to GitHub Release on v* tags
+
 * Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.2-1
 - dev: add .pre-commit-config.yaml with go-unit-tests (-race) and rpmlint hooks
 

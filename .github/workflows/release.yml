@@ -16,20 +16,14 @@ on:
 
 jobs:
   build-linux:
-    name: Build ${{ matrix.binary }} (${{ matrix.goarch }})
+    name: Build cli (${{ matrix.goarch }})
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     strategy:
       matrix:
-        binary: [cli, daemon]
         goarch: [amd64, arm64, ppc64le]
-        include:
-          - binary: cli
-            cmd: ./cmd/cli
-          - binary: daemon
-            cmd: ./cmd/daemon
 
     steps:
       - uses: actions/checkout@v4
@@ -53,11 +47,11 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
         run: |
-          OUT="openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}"
+          OUT="openlawsvpn-cli-linux-${{ matrix.goarch }}"
           go build \
             -ldflags "-s -w -X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
             -o "$OUT" \
-            ${{ matrix.cmd }}
+            ./cmd/cli
           sha256sum "$OUT" > "$OUT.sha256"
 
       - name: Upload to release
@@ -65,7 +59,7 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           files: |
-            openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}
-            openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}.sha256
+            openlawsvpn-cli-linux-${{ matrix.goarch }}
+            openlawsvpn-cli-linux-${{ matrix.goarch }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
