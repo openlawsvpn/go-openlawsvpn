@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- App background: rounded square, brand dark -->
+  <rect width="128" height="128" rx="22" ry="22" fill="#0d1117"/>
+
+  <!-- Shield body -->
+  <path d="M64 18 L96 30 L96 62 C96 82 80 98 64 108 C48 98 32 82 32 62 L32 30 Z"
+        fill="#1c2128" stroke="#f78166" stroke-width="3" stroke-linejoin="round"/>
+
+  <!-- Lock body -->
+  <rect x="52" y="62" width="24" height="18" rx="3" ry="3" fill="#f78166"/>
+
+  <!-- Lock shackle -->
+  <path d="M56 62 L56 54 C56 47 72 47 72 54 L72 62"
+        fill="none" stroke="#f78166" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Keyhole -->
+  <circle cx="64" cy="70" r="3" fill="#0d1117"/>
+  <rect x="62.5" y="70" width="3" height="5" rx="1" fill="#0d1117"/>
+</svg>

@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        0.2.8
+Version:        0.2.9
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
-# Source (daemon + protocol engine): BSL-1.1
-# GUI binary (statically links Rust crates): BSL-1.1 AND MIT AND Apache-2.0 AND BSD-2-Clause AND LGPL-2.1-or-later
-SourceLicense:  BSL-1.1
-License:        BSL-1.1
+# Source (daemon + protocol engine): LGPL-2.1-or-later
+# GUI binary (statically links Rust crates): LGPL-2.1-or-later AND MIT AND Apache-2.0 AND BSD-2-Clause
+SourceLicense:  LGPL-2.1-or-later
+License:        LGPL-2.1-or-later
 
 URL:            https://github.com/openlawsvpn/go-openlawsvpn
 Source0:        {{{ git_repo_pack }}}
@@ -28,7 +28,7 @@ No OpenVPN Inc runtime required.
 
 %package daemon
 Summary:        openlawsvpn VPN daemon (D-Bus system service)
-License:        BSL-1.1
+License:        LGPL-2.1-or-later
 Requires:       dbus
 Requires:       polkit
 %{?systemd_requires}
@@ -40,7 +40,7 @@ Exposes com.openlawsvpn.Daemon on the system bus.
 
 %package cli
 Summary:        openlawsvpn CLI
-License:        BSL-1.1
+License:        LGPL-2.1-or-later
 Requires:       iproute
 
 %description cli
@@ -51,7 +51,7 @@ Requires CAP_NET_ADMIN — run with sudo or set file capability.
 %package gui
 Summary:        openlawsvpn GTK4 GUI
 # GUI binary statically links Rust crates — full license conjunction required.
-License:        BSL-1.1 AND MIT AND Apache-2.0 AND BSD-2-Clause AND LGPL-2.1-or-later
+License:        LGPL-2.1-or-later AND MIT AND Apache-2.0 AND BSD-2-Clause
 Requires:       openlawsvpn-daemon = %{version}-%{release}
 Requires:       gtk4
 Requires:       libadwaita
@@ -124,6 +124,9 @@ install -Dm644 gui-gtk/resources/icons/vpn-disconnected.svg \
 install -Dm644 gui-gtk/resources/icons/vpn-connected.svg \
     %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-connected.svg
 
+install -Dm644 gui-gtk/resources/icons/com.openlawsvpn.gui.svg \
+    %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.openlawsvpn.gui.svg
+
 # ── Check ─────────────────────────────────────────────────────────────────────
 
 %if %{with check}
@@ -148,11 +151,11 @@ exit 0
 # ── Files ─────────────────────────────────────────────────────────────────────
 
 %files cli
-%license LICENSE
+%license LICENSE LICENSE_USAGE_EXCEPTION
 %{_bindir}/openlawsvpn-cli
 
 %files daemon
-%license LICENSE
+%license LICENSE LICENSE_USAGE_EXCEPTION
 %caps(cap_net_admin=eip) %{_libexecdir}/openlawsvpn-daemon
 %{_unitdir}/openlawsvpn-daemon.service
 %{_datadir}/dbus-1/system.d/com.openlawsvpn.Daemon.conf
@@ -166,6 +169,7 @@ exit 0
 %{_datadir}/applications/openlawsvpn-gui.desktop
 %{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-disconnected.svg
 %{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-connected.svg
+%{_datadir}/icons/hicolor/scalable/apps/com.openlawsvpn.gui.svg
 
 # ── Scriptlets ────────────────────────────────────────────────────────────────
 
@@ -188,6 +192,16 @@ gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.2.9-1
+- license: change from BSL-1.1 to LGPL-2.1-or-later + usage exception
+- gui: add dedicated app icon (com.openlawsvpn.gui.svg) — shield+lock design in brand colors
+  Fixes GNOME launcher showing broken-heart tray icon instead of app icon
+- desktop: Icon= updated to com.openlawsvpn.gui
+- gui: window icon-name uses app icon (com.openlawsvpn.gui) instead of tray state icon
+- cli: add detailed -h/--help usage text with USAGE, MODES, OPTIONS, EXAMPLES sections
+- relay: exit cleanly on server-initiated disconnect (v0.2.8)
+- relay: send standby status after tunnel drops (v0.2.7)
+
 * Sat May  2 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.1.0-22
 - relay: suppress spurious idle signal that stalled GUI at "Connecting to VPN for Phase 1"
 - relay: handle fragmented WebSocket frames; skip empty keepalive frames

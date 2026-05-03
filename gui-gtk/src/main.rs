@@ -135,7 +135,7 @@ fn build_ui(app: &Application) {
         .default_height(640)
         .content(&content)
         .build();
-    window.set_icon_name(Some(tray::ICON_DISCONNECTED_NAME));
+    window.set_icon_name(Some(tray::ICON_APP_NAME));
 
     // ── System tray ─────────────────────────────────────────────────────────
     let tray_state = Arc::new(Mutex::new(TrayState::default()));

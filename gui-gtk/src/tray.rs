@@ -19,6 +19,8 @@ const ICON_CONNECTED_NAME: &str = "openlawsvpn-connected";
 
 const ICON_CONNECTED_SVG: &[u8] = include_bytes!("../resources/icons/vpn-connected.svg");
 const ICON_DISCONNECTED_SVG: &[u8] = include_bytes!("../resources/icons/vpn-disconnected.svg");
+const ICON_APP_SVG: &[u8] = include_bytes!("../resources/icons/com.openlawsvpn.gui.svg");
+pub const ICON_APP_NAME: &str = "com.openlawsvpn.gui";
 
 /// Shared VPN state mirrored into the tray icon.
 #[derive(Clone, Default)]
@@ -400,6 +402,8 @@ pub fn install_icons() {
     let _ = std::fs::create_dir_all(&base);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_CONNECTED_NAME)), ICON_CONNECTED_SVG);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_DISCONNECTED_NAME)), ICON_DISCONNECTED_SVG);
+    // App icon: used by GNOME launcher, Alt+Tab, taskbar. Distinct from tray state icons.
+    let _ = std::fs::write(base.join(format!("{}.svg", ICON_APP_NAME)), ICON_APP_SVG);
 }
 
 fn dirs_or_home() -> std::path::PathBuf {
