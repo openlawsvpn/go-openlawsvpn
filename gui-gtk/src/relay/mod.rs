@@ -225,10 +225,10 @@ impl RelayScreen {
             VpnState::RelayDelivering { .. } => {
                 self.set_busy(true, "Delivering credentials to agent…");
             }
-            VpnState::RelayConnected { agent_id } => {
+            VpnState::RelayConnected { agent_id: _ } => {
                 *self.connected.borrow_mut() = true;
-                self.set_busy(false, &format!("Agent {} tunnel is up.", agent_id));
-                self.disconnect_btn.set_visible(true);
+                // Clear the progress bar — status is shown inline on the agent row.
+                self.set_busy(false, "");
                 self.refresh_agents();
             }
             VpnState::Error(msg) => {
@@ -335,72 +335,97 @@ impl RelayScreen {
             let any_busy = *busy.borrow();
             let profiles = store.borrow().list();
 
+            let has_connected = agents.iter().any(|a| a.status == "connected");
+
             for agent in &agents {
                 let row = ActionRow::new();
                 let ip_str = agent.assigned_ip.as_deref().unwrap_or("");
                 row.set_title(&agent.hostname);
-                let subtitle = if ip_str.is_empty() {
-                    agent.status.clone()
-                } else {
-                    format!("{} — {}", agent.status, ip_str)
-                };
-                row.set_subtitle(&subtitle);
 
-                if agent.status == "standby" && !any_busy {
-                    let connect_btn = Button::with_label("Connect");
-                    connect_btn.set_css_classes(&["suggested-action", "pill"]);
-                    connect_btn.set_valign(gtk4::Align::Center);
-                    row.add_suffix(&connect_btn);
-
-                    let agent_id = agent.agent_id.clone();
-                    let token_c = token.clone();
-                    let relay_url_c = relay_url.clone();
-                    let profiles_c = profiles.clone();
-                    let store_c = store.clone();
-                    let vpn_c = vpn.clone();
-                    let toast_c = toast.clone();
-
-                    connect_btn.connect_clicked(move |_| {
-                        // Pick the first profile; future: add profile picker popover.
-                        let Some(profile) = profiles_c.first() else {
-                            let t = Toast::new("No profiles — import an .ovpn first");
-                            toast_c.add_toast(t);
-                            return;
+                match agent.status.as_str() {
+                    "connected" => {
+                        let subtitle = if ip_str.is_empty() {
+                            "tunnel up".to_string()
+                        } else {
+                            format!("tunnel up — {ip_str}")
                         };
-                        let config_path = store_c.borrow()
-                            .config_path(&profile.id)
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        let config_content = std::fs::read_to_string(&config_path)
-                            .unwrap_or_default();
+                        row.set_subtitle(&subtitle);
 
-                        let tx = vpn_c.cmd_tx.clone();
-                        let aid = agent_id.clone();
-                        let tok = token_c.clone();
-                        let rurl = relay_url_c.clone();
-                        glib::spawn_future_local(async move {
-                            tx.send(VpnCommand::ConnectRelay {
-                                config_path,
-                                config_content,
-                                agent_id: aid,
-                                org_token: tok,
-                                relay_url: rurl,
-                            }).await.ok();
+                        // Disconnect button lives on the row — no separate bottom bar.
+                        let dis_btn = Button::with_label("Disconnect");
+                        dis_btn.set_css_classes(&["destructive-action", "pill"]);
+                        dis_btn.set_valign(gtk4::Align::Center);
+                        row.add_suffix(&dis_btn);
+
+                        let vpn_c = vpn.clone();
+                        dis_btn.connect_clicked(move |_| {
+                            let tx = vpn_c.cmd_tx.clone();
+                            glib::spawn_future_local(async move {
+                                tx.send(VpnCommand::Disconnect).await.ok();
+                            });
                         });
-                    });
+                    }
+                    "standby" if !any_busy && !has_connected => {
+                        row.set_subtitle("standby");
+
+                        let connect_btn = Button::with_label("Connect");
+                        connect_btn.set_css_classes(&["suggested-action", "pill"]);
+                        connect_btn.set_valign(gtk4::Align::Center);
+                        row.add_suffix(&connect_btn);
+
+                        let agent_id = agent.agent_id.clone();
+                        let token_c = token.clone();
+                        let relay_url_c = relay_url.clone();
+                        let profiles_c = profiles.clone();
+                        let store_c = store.clone();
+                        let vpn_c = vpn.clone();
+                        let toast_c = toast.clone();
+
+                        connect_btn.connect_clicked(move |_| {
+                            let Some(profile) = profiles_c.first() else {
+                                let t = Toast::new("No profiles — import an .ovpn first");
+                                toast_c.add_toast(t);
+                                return;
+                            };
+                            let config_path = store_c.borrow()
+                                .config_path(&profile.id)
+                                .map(|p| p.to_string_lossy().into_owned())
+                                .unwrap_or_default();
+                            let config_content = std::fs::read_to_string(&config_path)
+                                .unwrap_or_default();
+
+                            let tx = vpn_c.cmd_tx.clone();
+                            let aid = agent_id.clone();
+                            let tok = token_c.clone();
+                            let rurl = relay_url_c.clone();
+                            glib::spawn_future_local(async move {
+                                tx.send(VpnCommand::ConnectRelay {
+                                    config_path,
+                                    config_content,
+                                    agent_id: aid,
+                                    org_token: tok,
+                                    relay_url: rurl,
+                                }).await.ok();
+                            });
+                        });
+                    }
+                    _ => {
+                        let subtitle = if ip_str.is_empty() {
+                            agent.status.clone()
+                        } else {
+                            format!("{} — {ip_str}", agent.status)
+                        };
+                        row.set_subtitle(&subtitle);
+                    }
                 }
 
                 list.append(&row);
             }
 
-            // If an agent is already connected and we have no active relay flow
-            // (e.g. fresh app open), infer Connected state from the agent list.
+            // Hide the bottom disconnect button — it now lives on the connected row.
+            disconnect_btn.set_visible(false);
             if !any_busy {
-                if let Some(agent) = agents.iter().find(|a| a.status == "connected") {
-                    status_label.set_text(&format!("Agent {} tunnel is up.", agent.hostname));
-                    status_label.set_visible(true);
-                    disconnect_btn.set_visible(true);
-                }
+                status_label.set_visible(false);
             }
         });
     }

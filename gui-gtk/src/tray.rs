@@ -369,7 +369,7 @@ const AUTOSTART_DESKTOP: &str = "\
 Type=Application\n\
 Name=openlawsvpn\n\
 Exec=openlawsvpn-gui\n\
-Icon=network-vpn\n\
+Icon=com.openlawsvpn.gui\n\
 Comment=AWS Client VPN\n\
 Terminal=false\n\
 X-GNOME-Autostart-enabled=true\n\
@@ -397,13 +397,20 @@ fn set_launch_on_login(enable: bool) {
 }
 
 /// Install custom SVG icons into the user's local icon theme (~/.local/share/icons/hicolor/scalable/apps/).
+/// Also registers the theme path with GTK so set_icon_name() resolves them immediately.
 pub fn install_icons() {
     let base = dirs_or_home().join(".local/share/icons/hicolor/scalable/apps");
     let _ = std::fs::create_dir_all(&base);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_CONNECTED_NAME)), ICON_CONNECTED_SVG);
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_DISCONNECTED_NAME)), ICON_DISCONNECTED_SVG);
-    // App icon: used by GNOME launcher, Alt+Tab, taskbar. Distinct from tray state icons.
     let _ = std::fs::write(base.join(format!("{}.svg", ICON_APP_NAME)), ICON_APP_SVG);
+
+    // Register the theme root with GTK so set_icon_name() resolves the freshly-written SVGs.
+    // add_search_path signals the theme changed, which also updates GNOME Shell's cache.
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let theme = gtk4::IconTheme::for_display(&display);
+        theme.add_search_path(dirs_or_home().join(".local/share/icons"));
+    }
 }
 
 fn dirs_or_home() -> std::path::PathBuf {
