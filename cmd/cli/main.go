@@ -417,7 +417,13 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 
 		// Wait for disconnect or context cancel.
 		<-client.Done()
-		return client.WaitForDisconnect()
+		err := client.WaitForDisconnect()
+
+		// Tell the relay the agent is now idle so the app sees "standby" immediately.
+		if agentPtr != nil {
+			agentPtr.SendStatus(ctx, payload.SessionID, "standby", "")
+		}
+		return err
 	}
 
 	agent, err := relay.New(cfg)
