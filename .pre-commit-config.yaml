@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/dnephin/pre-commit-golang
+    rev: v0.5.1
+    hooks:
+      - id: go-unit-tests
+        args: [-race]
+
+  - repo: local
+    hooks:
+      - id: rpmlint
+        name: rpmlint spec
+        language: system
+        entry: bash -c 'rpmlint packaging/openlawsvpn.spec'
+        pass_filenames: false
+        files: ^packaging/.*\.spec$
