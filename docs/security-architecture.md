@@ -1,7 +1,7 @@
 # Security Architecture: openlawsvpn
 
 Version: 1.0  
-Applies to: `go-openvpn3` — the Linux daemon/GUI stack  
+Applies to: `go-openlawsvpn` — the Linux daemon/GUI stack  
 License: LGPL-2.1-or-later
 
 ---
@@ -146,7 +146,7 @@ The following are out of scope by design:
 
 - **Same-UID process isolation.** The daemon trusts any process on the session bus that shares the user's UID. If the attacker already runs as the logged-in user (e.g. a malicious Flatpak with host D-Bus access), they can call `Connect()`, `Disconnect()`, and read `Status()`. This is the same trust model that NetworkManager, PulseAudio, and every other session D-Bus service uses.
 
-- **Profile content validation.** The daemon parses profiles using the `profile` package (see `/go-openvpn3/profile/profile.go`), which validates syntax but cannot determine whether a server endpoint is malicious. A profile that points to an attacker-controlled server will connect successfully. Profile management and provenance is outside the daemon's responsibility.
+- **Profile content validation.** The daemon parses profiles using the `profile` package (see `profile/profile.go`), which validates syntax but cannot determine whether a server endpoint is malicious. A profile that points to an attacker-controlled server will connect successfully. Profile management and provenance is outside the daemon's responsibility.
 
 - **Kernel network namespace isolation.** The daemon does not use network namespaces or seccomp-BPF filtering. These could be added in a future hardening pass but are not part of v1.
 
