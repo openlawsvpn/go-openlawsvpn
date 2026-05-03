@@ -133,6 +133,5 @@ the user must complete the browser SAML flow again.
 
 ## License
 
-Business Source License 1.1. Converts to MIT on 2031-01-01.
-See [LICENSE](LICENSE) for details. Commercial use requires a separate license —
-contact contact@openlawsvpn.com.
+LGPL-2.1-or-later with usage exception.
+See [LICENSE](LICENSE) and [LICENSE_USAGE_EXCEPTION](LICENSE_USAGE_EXCEPTION) for details.

@@ -41,3 +41,6 @@ go.work.sum
 /ovpn3
 gui-gtk/Cargo.lock
 gui-gtk/.cargo/
+
+# Claude Code local settings
+.claude/

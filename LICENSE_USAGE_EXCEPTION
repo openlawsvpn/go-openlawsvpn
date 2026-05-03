@@ -1,0 +1,17 @@
+openlawsvpn Usage Exception
+==========================
+
+As a special exception to the GNU Lesser General Public License v2.1,
+you may use, run, and distribute this software in any environment —
+including cloud virtual machines, containers, CI/CD pipelines, automated
+scripts, and headless servers — without any source-release obligations
+applying to your own code, your VPN server configuration, or other
+software running on the same system.
+
+This exception applies solely to USE of the software. It does not apply
+to MODIFICATION or REDISTRIBUTION of the software itself. If you modify
+openlawsvpn and distribute the modified version, the standard terms of
+LGPL-2.1-or-later apply to your modifications.
+
+This exception is granted by the copyright holders and cannot be revoked
+for code already received under it.
