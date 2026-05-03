@@ -50,7 +50,9 @@ The background daemon keeps the tunnel alive for the rest of the job.
     # the daemon continues running in the background
 
 - name: Check internal service health
-  run: curl -sf http://10.130.32.32:5080/healthz
+  env:
+    HEALTH_URL: ${{ secrets.INTERNAL_HEALTH_URL }}
+  run: curl -sf "$HEALTH_URL"
 
 - name: Disconnect VPN
   if: always()

@@ -1,8 +1,7 @@
 # go-openlawsvpn — Implementation Status
 
 > All tasks in the original daemon plan are complete. This file now serves as
-> a living status reference. See `openlawsvpn-private/ROADMAP.md` for the
-> cross-repo roadmap.
+> a living status reference.
 
 ---
 

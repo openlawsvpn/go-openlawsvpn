@@ -4,7 +4,8 @@ name: VPN Integration
 # verifies connectivity to an internal service via the VPN.
 #
 # Requires these repository secrets:
-#   RELAY_TOKEN   — org token registered in relay-organisations DynamoDB table
+#   RELAY_TOKEN        — org token registered in relay-organisations DynamoDB table
+#   INTERNAL_HEALTH_URL — URL of an internal service to verify VPN connectivity (e.g. http://10.x.x.x:port/healthz)
 #
 # The mobile/desktop app (or any operator with the org token) must approve the
 # connection in the relay app UI within ~5 minutes of the job starting.
@@ -47,9 +48,11 @@ jobs:
           echo "Tunnel is up (daemon pid $(cat /tmp/openlawsvpn-cli.pid))"
 
       - name: Check internal service health
+        env:
+          HEALTH_URL: ${{ secrets.INTERNAL_HEALTH_URL }}
         run: |
           echo "Testing connectivity to internal service..."
-          response=$(curl -si --max-time 10 http://10.130.32.32:5080/healthz)
+          response=$(curl -si --max-time 10 "$HEALTH_URL")
           echo "$response"
 
           # Assert HTTP 200
