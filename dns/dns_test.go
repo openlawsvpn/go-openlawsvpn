@@ -148,7 +148,7 @@ func TestIsManaged(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !managed {
-		t.Error("expected IsManaged=true for go-openvpn3-generated file")
+		t.Error("expected IsManaged=true for go-openlawsvpn-generated file")
 	}
 
 	// Non-managed file.

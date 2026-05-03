@@ -1,4 +1,4 @@
-// Package vpn is the top-level go-openvpn3 package.
+// Package vpn is the top-level go-openlawsvpn package.
 //
 // It provides a high-level OpenVPN3 client that handles the full connection
 // lifecycle including SAML/CRV1 authentication for AWS Client VPN and
@@ -103,7 +103,7 @@ const (
 	stateDisconnected             // fully torn down
 )
 
-// Client is a go-openvpn3 VPN client.
+// Client is a go-openlawsvpn VPN client.
 //
 // A Client is not safe for concurrent use by multiple goroutines except where
 // noted (Stats and Wait may be called concurrently with the data channel).

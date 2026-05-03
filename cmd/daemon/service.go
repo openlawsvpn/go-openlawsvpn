@@ -36,7 +36,7 @@ const (
 )
 
 // DaemonService implements the com.openlawsvpn.Daemon D-Bus interface.
-// It wraps a go-openvpn3 Client and serialises all VPN operations.
+// It wraps a go-openlawsvpn Client and serialises all VPN operations.
 type DaemonService struct {
 	conn *dbus.Conn
 

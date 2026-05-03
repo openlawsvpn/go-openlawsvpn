@@ -90,7 +90,7 @@ var ResolvConfPath = "/etc/resolv.conf"
 // (normally /etc/resolv.conf), replacing any previous content.
 //
 // The generated file is prefixed with a comment marking it as managed by
-// go-openvpn3 so that it can be identified and restored on disconnect.
+// go-openlawsvpn so that it can be identified and restored on disconnect.
 func ApplyResolvConf(cfg *Config) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil
@@ -291,7 +291,7 @@ func Revert(backend Backend, ifName, backupPath string) error {
 }
 
 // IsManaged reports whether path (typically /etc/resolv.conf) was written by
-// go-openvpn3 (i.e. the first line is the managed-file comment).
+// go-openlawsvpn (i.e. the first line is the managed-file comment).
 func IsManaged(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {

@@ -1,6 +1,6 @@
 // Package profile parses OpenVPN .ovpn configuration files.
 //
-// It handles the directives that go-openvpn3 needs: remote, port, proto,
+// It handles the directives that go-openlawsvpn needs: remote, port, proto,
 // inline PEM blocks (<ca>, <cert>, <key>), cipher, auth, reneg-sec, and
 // common extra options such as comp-lzo / compress.
 package profile

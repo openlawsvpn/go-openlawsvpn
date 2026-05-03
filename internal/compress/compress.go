@@ -10,7 +10,7 @@
 //	0x69 — data is NOT compressed (lz4 stub byte, used as a pass-through)
 //	0xfa — data IS lz4-compressed (not implemented; never sent by this client)
 //
-// go-openvpn3 does not link liblz4 (CGO_ENABLED=0), so it only supports the
+// go-openlawsvpn does not link liblz4 (CGO_ENABLED=0), so it only supports the
 // pass-through path (no actual compression). Sending 0x69 on every packet is
 // safe and interoperable with openvpn3-core: the server accepts it and does
 // not compress replies either, because the client never set the LZ4 capability

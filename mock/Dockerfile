@@ -1,4 +1,4 @@
-# mock/Dockerfile — builds the go-openvpn3 mock server Docker image.
+# mock/Dockerfile — builds the go-openlawsvpn mock server Docker image.
 #
 # Image: ghcr.io/openlawsvpn/ovpn3-mock-server
 #

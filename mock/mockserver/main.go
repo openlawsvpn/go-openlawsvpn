@@ -1,4 +1,4 @@
-// Command mockserver is the go-openvpn3 mock OpenVPN server.
+// Command mockserver is the go-openlawsvpn mock OpenVPN server.
 //
 // It handles the full control-channel + TLS + key-method-2 auth packet exchange
 // needed by integration tests. Every event is logged to stdout as one JSON

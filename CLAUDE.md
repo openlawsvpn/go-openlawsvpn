@@ -1,4 +1,4 @@
-# Claude context for go-openvpn3
+# Claude context for go-openlawsvpn
 
 ## What this repo is
 
@@ -157,7 +157,7 @@ The Go `Client` struct exposes equivalent semantics via `Connect(ctx)`,
 ## Repository layout
 
 ```
-go-openvpn3/
+go-openlawsvpn/
   CLAUDE.md         — this file (AI/contributor context)
   README.md         — user-facing docs, build instructions, known limitations
   client.go         — top-level Client: Connect, Disconnect, Stats, rekey loop

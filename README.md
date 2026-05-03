@@ -1,4 +1,4 @@
-# go-openvpn3
+# go-openlawsvpn
 
 Pure-Go OpenVPN3 client protocol implementation — AWS Client VPN + SAML/CRV1 flow.
 

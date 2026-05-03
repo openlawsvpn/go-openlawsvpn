@@ -1,6 +1,6 @@
 //go:build android
 
-// Android-specific wrappers for the go-openvpn3 client.
+// Android-specific wrappers for the go-openlawsvpn client.
 //
 // gomobile bind compiles with GOOS=android, which satisfies the "android"
 // build constraint.  This file is therefore included automatically in

@@ -1,4 +1,4 @@
-// Command openlawsvpn-cli is a minimal CLI for the go-openvpn3 VPN client.
+// Command openlawsvpn-cli is a minimal CLI for the go-openlawsvpn VPN client.
 //
 // It implements the AWS Client VPN SAML/CRV1 authentication flow and
 // brings up a Linux TUN interface with the routes and DNS pushed by the server.
