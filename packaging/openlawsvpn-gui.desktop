@@ -7,3 +7,5 @@ Terminal=false
 Type=Application
 Categories=Network;
 Keywords=vpn;aws;saml;
+StartupWMClass=com.openlawsvpn.gui
+StartupNotify=true

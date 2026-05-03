@@ -4,7 +4,7 @@
 //
 // Flow:
 //   1. User enters org token and saves.
-//   2. Agent list auto-refreshes every 5 s (GET /agents?token=).
+//   2. Agent list refreshes on tab open and on state → Idle/Error (not while connected).
 //   3. User selects a profile + clicks Connect on a standby agent.
 //   4. GUI calls daemon ConnectRelay → daemon does Phase 1 + ACS + POST /execute.
 //   5. GUI watches StateChanged for relay_delivering / relay_connected.
@@ -51,6 +51,8 @@ pub struct RelayScreen {
     spinner: Spinner,
     disconnect_btn: Button,
     busy: Rc<RefCell<bool>>,
+    /// True while a relay session is active (connected). Polling is suppressed.
+    connected: Rc<RefCell<bool>>,
 }
 
 impl RelayScreen {
@@ -174,6 +176,7 @@ impl RelayScreen {
             spinner,
             disconnect_btn: disconnect_btn.clone(),
             busy: Rc::new(RefCell::new(false)),
+            connected: Rc::new(RefCell::new(false)),
         }));
 
         // Save & Refresh button
@@ -209,20 +212,8 @@ impl RelayScreen {
             });
         }
 
-        // Auto-refresh agents every 5s using glib::timeout_add_seconds_local
-        {
-            let sc = screen.clone();
-            glib::timeout_add_seconds_local(5, move || {
-                let s = sc.borrow();
-                if !s.settings.borrow().org_token.is_empty() && !*s.busy.borrow() {
-                    drop(s);
-                    sc.borrow().refresh_agents();
-                }
-                glib::ControlFlow::Continue
-            });
-        }
-
-        // Initial load if token already saved
+        // Initial load if token already saved. Further refreshes are triggered by
+        // set_relay_state() when the state returns to Idle/Error, and by save_btn.
         if !screen.borrow().settings.borrow().org_token.is_empty() {
             screen.borrow().refresh_agents();
         }
@@ -248,11 +239,13 @@ impl RelayScreen {
                 self.set_busy(true, "Delivering credentials to agent…");
             }
             VpnState::RelayConnected { agent_id } => {
+                *self.connected.borrow_mut() = true;
                 self.set_busy(false, &format!("Agent {} tunnel is up.", agent_id));
                 self.disconnect_btn.set_visible(true);
                 self.refresh_agents();
             }
             VpnState::Error(msg) => {
+                *self.connected.borrow_mut() = false;
                 self.set_busy(false, &format!("Error: {}", msg));
                 self.disconnect_btn.set_visible(false);
                 let toast = Toast::new(&format!("Relay error: {}", msg));
@@ -260,6 +253,7 @@ impl RelayScreen {
                 self.refresh_agents();
             }
             VpnState::Idle => {
+                *self.connected.borrow_mut() = false;
                 self.set_busy(false, "");
                 self.disconnect_btn.set_visible(false);
                 self.refresh_agents();
@@ -301,10 +295,22 @@ impl RelayScreen {
         let (tx, rx) = futures_channel::oneshot::channel::<Result<Vec<AgentInfo>, String>>();
         let url = format!("{}/agents?token={}", relay_url, urlencoding::encode(&token));
         std::thread::spawn(move || {
-            let result = reqwest::blocking::get(&url)
-                .and_then(|r| r.error_for_status())
-                .and_then(|r| r.json::<Vec<AgentInfo>>())
-                .map_err(|e| e.to_string());
+            let ua = format!(
+                "openlawsvpn/{} (linux-gtk; {})",
+                env!("CARGO_PKG_VERSION"),
+                glib::host_name(),
+            );
+            let result = reqwest::blocking::Client::builder()
+                .user_agent(ua)
+                .build()
+                .map_err(|e| e.to_string())
+                .and_then(|c| {
+                    c.get(&url)
+                        .send()
+                        .and_then(|r| r.error_for_status())
+                        .and_then(|r| r.json::<Vec<AgentInfo>>())
+                        .map_err(|e| e.to_string())
+                });
             let _ = tx.send(result);
         });
 

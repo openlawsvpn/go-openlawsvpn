@@ -176,9 +176,11 @@ exit 0
 %post gui
 %{?ldconfig_scriptlet}
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
+update-desktop-database %{_datadir}/applications &>/dev/null || :
 
 %postun gui
 gtk-update-icon-cache -f -t %{_datadir}/icons/hicolor &>/dev/null || :
+update-desktop-database %{_datadir}/applications &>/dev/null || :
 
 %post daemon
 %systemd_post openlawsvpn-daemon.service
