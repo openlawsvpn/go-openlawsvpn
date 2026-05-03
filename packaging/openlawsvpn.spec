@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 Name:           openlawsvpn
 Version:        0.2.9
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): LGPL-2.1-or-later
