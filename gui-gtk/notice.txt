@@ -1,44 +1,40 @@
 Open Source Notices
 ===================
 
-openlawsvpn
------------
+go-openlawsvpn (protocol engine + daemon)
+------------------------------------------
 License:  LGPL-2.1-or-later with usage exception
-Source:   https://github.com/openlawsvpn/openlawsvpn
+Source:   https://github.com/openlawsvpn/go-openlawsvpn
 
-The usage exception permits shipping this library in proprietary products
+The usage exception permits using this library in proprietary products
 without source-release obligations for your application code.
 
-openvpn3-core
--------------
-License:       AGPL-3.0-or-later
-Upstream:      https://github.com/OpenVPN/openvpn3
-Modifications: https://github.com/openlawsvpn/openlawsvpn (openvpn3-core/)
+GTK4 / libadwaita
+-----------------
+License: LGPL-2.1-or-later
+Source:  https://gtk.org / https://gitlab.gnome.org/GNOME/libadwaita
 
-Source is available at the repositories above per AGPL-3.0 Section 13.
-
-ASIO
+zbus
 ----
-License: Boost Software License 1.0 (BSL-1.0)
-Source:  https://github.com/chriskohlhoff/asio
-(included as part of openvpn3-core)
+License: MIT
+Source:  https://github.com/dbus2/zbus
 
-OpenSSL
+reqwest
 -------
-License: Apache License 2.0
-Source:  https://github.com/openssl/openssl
+License: MIT / Apache-2.0
+Source:  https://github.com/seanmonstar/reqwest
 
-LZ4
----
-License: BSD 2-Clause License
-Source:  https://github.com/lz4/lz4
+tokio
+-----
+License: MIT
+Source:  https://github.com/tokio-rs/tokio
 
-AndroidX / Jetpack
+serde / serde_json
 ------------------
-License: Apache License 2.0
-Source:  https://cs.android.com/androidx
+License: MIT / Apache-2.0
+Source:  https://github.com/serde-rs/serde
 
-Kotlin Standard Library
------------------------
-License: Apache License 2.0
-Source:  https://github.com/JetBrains/kotlin
+uuid
+----
+License: Apache-2.0
+Source:  https://github.com/uuid-rs/uuid
