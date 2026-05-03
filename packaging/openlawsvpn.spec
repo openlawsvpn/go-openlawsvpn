@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.0
+Version:        1.0.1
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -194,6 +194,24 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.1-1
+- about: show app version and engine version (go-openlawsvpn CARGO_PKG_VERSION)
+- about: replace BSL-1.1 legal section with LGPL-2.1-or-later with usage exception
+- about: notice.txt updated — remove stale openvpn3-core/ASIO/OpenSSL entries
+- gui: fix app icon in Dash/Alt+Tab — register ~/.local/share/icons in GTK search path
+- gui: autostart .desktop Icon= changed to com.openlawsvpn.gui (heart+lock)
+- relay: merge connected agent status onto agent row; Disconnect button on row
+- fix: clone token before thread spawn to fix borrow-after-move build error
+
+* Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.0-2
+- about: show app version and engine version (go-openlawsvpn CARGO_PKG_VERSION)
+- about: replace BSL-1.1 legal section with LGPL-2.1-or-later with usage exception
+- about: notice.txt updated — remove stale openvpn3-core/ASIO/OpenSSL entries
+- gui: fix app icon in Dash/Alt+Tab — register ~/.local/share/icons in GTK search path
+- gui: autostart .desktop Icon= changed to com.openlawsvpn.gui (heart+lock)
+- relay: merge connected agent status onto agent row; Disconnect button on row
+- fix: clone token before thread spawn to fix borrow-after-move build error
+
 * Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.0-1
 - security: relay WS token moved from URL to auth frame (BC1)
 - security: relay HTTP API uses Authorization: Bearer header on all routes (F4)

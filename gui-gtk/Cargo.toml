@@ -1,6 +1,6 @@
 [package]
 name = "openlawsvpn-gui"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "GTK4 + libadwaita GUI for openlawsvpn"
 license = "LGPL-2.1-or-later"
