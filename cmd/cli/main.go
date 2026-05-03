@@ -78,7 +78,7 @@ import (
 )
 
 func main() {
-	configPath    := flag.String("config", "", "path to .ovpn profile file (required)")
+	configPath    := flag.String("config", "", "path to .ovpn profile file (required in direct mode)")
 	samlToken     := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
 	relayToken    := flag.String("relay", "", "organisation token — enables relay mode")
 	relayEndpoint := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
@@ -88,6 +88,95 @@ func main() {
 	pidFile       := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
 	logFile       := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
 	browserCmd    := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
+
+	flag.Usage = func() {
+		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
+
+USAGE
+  openlawsvpn-cli -config <path.ovpn> [OPTIONS]          # direct mode
+  openlawsvpn-cli -relay <token> [OPTIONS]               # relay/headless mode
+
+MODES
+
+  Direct mode   Connect interactively on this machine. A browser opens for
+                SAML login; the token is captured automatically via the ACS
+                server on 127.0.0.1:35001. Requires root or CAP_NET_ADMIN.
+
+  Relay mode    Register as a headless agent waiting for credentials. The
+                mobile/desktop app runs the SAML flow and delivers the
+                completed credentials to this agent via the relay service.
+                The tunnel is then established here. Useful for CI/CD runners
+                and remote VMs that cannot open a browser.
+
+OPTIONS
+
+  -config <path>          Path to .ovpn profile file.
+                          Required in direct mode. Optional in relay mode —
+                          the app always sends the profile in the payload;
+                          -config is only used as a fallback.
+
+  -relay <token>          Organisation token. Enables relay mode.
+                          Obtain from the app Settings screen.
+
+  -relay-endpoint <url>   Relay WebSocket URL.
+                          Default: wss://ws.relay.openlawsvpn.com
+
+  -agent-id <uuid>        Stable UUID identifying this agent across reconnects.
+                          Default: random (changes on every restart).
+                          Set a fixed value to keep the same label in the app.
+
+  -hostname <name>        Human-readable label shown in the app agent list.
+                          Default: system hostname (os.Hostname).
+
+  -daemon                 Fork to background after the tunnel is up.
+                          The foreground process blocks until the VPN is
+                          established, prints "daemon started (pid N)", then
+                          exits 0. The background process keeps the tunnel alive.
+                          Use -pidfile to record the PID for later cleanup.
+
+  -pidfile <path>         Write the daemon PID to this file. Only used with -daemon.
+                          Example: -pidfile /tmp/openlawsvpn.pid
+
+  -logfile <path>         Redirect daemon stdout+stderr to this file.
+                          Only used with -daemon. Default: /dev/null.
+                          Example: -logfile /tmp/openlawsvpn.log
+
+  -saml-token <base64>    Pre-supplied SAMLResponse (base64). Skips the ACS
+                          server and browser flow. Useful for scripted testing.
+
+  -browser <cmd>          Browser command to open the SAML URL.
+                          Default: xdg-open. Example: -browser firefox
+
+  -h, -help               Print this help message.
+
+EXAMPLES
+
+  # Interactive SAML login (direct mode)
+  sudo openlawsvpn-cli -config ~/Downloads/client.ovpn
+
+  # Relay agent — block until app approves, then stay in foreground
+  sudo openlawsvpn-cli -relay $TOKEN -config ~/Downloads/client.ovpn
+
+  # Relay agent — daemon mode for CI/CD (exits once tunnel is up)
+  sudo openlawsvpn-cli \
+    -relay $TOKEN \
+    -daemon \
+    -pidfile /tmp/openlawsvpn.pid \
+    -logfile /tmp/openlawsvpn.log
+
+  # Disconnect daemon
+  sudo kill $(cat /tmp/openlawsvpn.pid)
+
+  # Fixed agent identity across restarts
+  sudo openlawsvpn-cli -relay $TOKEN -agent-id acf3b812-… -hostname build-runner-01
+
+RELAY ENDPOINTS
+  WebSocket:  wss://ws.relay.openlawsvpn.com
+  REST API:   https://api.relay.openlawsvpn.com/api/v1
+
+`)
+	}
+
 	flag.Parse()
 
 	// Daemon re-exec: when OPENLAWSVPN_READY_FD is set, we are the background
