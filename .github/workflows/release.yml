@@ -1,0 +1,71 @@
+name: Release
+
+# Fires on every v* tag in parallel with aar.yml.
+# Builds static Linux binaries (cli + daemon) for amd64 / arm64 / ppc64le
+# and attaches them — plus sha256 checksums — to the GitHub Release that
+# aar.yml creates for the same tag.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g. v1.0.2)'
+        required: true
+
+jobs:
+  build-linux:
+    name: Build ${{ matrix.binary }} (${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        binary: [cli, daemon]
+        goarch: [amd64, arm64, ppc64le]
+        include:
+          - binary: cli
+            cmd: ./cmd/cli
+          - binary: daemon
+            cmd: ./cmd/daemon
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUT="openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}"
+          go build \
+            -ldflags "-s -w -X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
+            -o "$OUT" \
+            ${{ matrix.cmd }}
+          sha256sum "$OUT" > "$OUT.sha256"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}
+            openlawsvpn-${{ matrix.binary }}-linux-${{ matrix.goarch }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
