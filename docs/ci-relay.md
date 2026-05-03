@@ -1,50 +1,32 @@
 # Using openlawsvpn-cli relay mode in CI/CD pipelines
 
 `openlawsvpn-cli` relay mode lets a CI runner connect to an internal VPN network
-**without storing credentials in the pipeline**. The SAML auth flow runs once
-on the operator's machine; the runner just receives the tunnel credentials via
-the relay.
+**without storing credentials in the pipeline**. The SAML auth flow runs on the
+operator's phone or desktop; the runner receives the completed tunnel credentials
+via the relay and brings the VPN up as a background daemon.
 
 ---
 
 ## How it works
 
 ```
-CI runner                    Relay server              Operator's machine
-──────────                   ─────────────             ──────────────────
-openlawsvpn-cli -relay <token>  ──WS──▶  ws.relay.…  ◀──REST──  app: POST /connect
-       │  waits...                                           POST /session/…/execute
-       │                                                     (delivers SAML creds)
+CI runner                       Relay (AWS)              Operator (phone/desktop)
+─────────                       ───────────              ───────────────────────
+openlawsvpn-cli -relay <token>
+  -daemon                ──WS──▶  relay.openlawsvpn.com  ◀──REST──  app lists agents
+  prints: daemon started (pid N)                                      taps Connect
+  pipeline continues immediately                                      SAML browser flow
+                                                                      POST /session/…/execute
+       │  (background)
        ▼
-  ConnectPhase2()
+  ConnectPhase2()  ◀──── WS push: phase2 payload ─────────────────────────────────┘
   tunnel up
-  prints: OVPN3_TUNNEL_UP ...
-       │
-  pipeline continues
+  agent sends status=connected
 ```
 
-The runner never handles Phase 1 or the browser SSO flow. The operator (or an
-automated tool) triggers the connection from the app or API.
-
----
-
-## CI detection
-
-When the `CI` environment variable is set to any non-empty value other than
-`0` or `false`, `openlawsvpn-cli` enters CI mode:
-
-- Stays connected after Phase 2 (does not exit — keeps the tunnel alive for
-  the rest of the job).
-- Prints a machine-readable line to **stdout** when the tunnel is up:
-
-```
-OVPN3_TUNNEL_UP local=<outbound-ip> vpn=<assigned-ip> endpoint=<server-ip>
-```
-
-This lets the pipeline detect readiness by tailing stdout or the log.
-
-GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
-`CI=true` automatically. No extra configuration is needed.
+The runner never handles Phase 1 or the browser SSO flow.
+After `daemon started`, the foreground step exits 0 immediately — the pipeline continues.
+The background daemon keeps the tunnel alive for the rest of the job.
 
 ---
 
@@ -54,28 +36,40 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 - name: Build openlawsvpn-cli
   run: CGO_ENABLED=0 go build -o /usr/local/bin/openlawsvpn-cli ./cmd/cli
 
-- name: Start relay agent
+- name: Start relay agent (daemon)
+  timeout-minutes: 5
   env:
     RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
   run: |
-    sudo -E CI=true openlawsvpn-cli -relay "$RELAY_TOKEN" &>/tmp/openlawsvpn-cli.log &
-    echo $! > /tmp/openlawsvpn-cli.pid
+    sudo openlawsvpn-cli \
+      -relay "$RELAY_TOKEN" \
+      -daemon \
+      -pidfile /tmp/openlawsvpn.pid \
+      -logfile /tmp/openlawsvpn.log
+    # blocks until the app approves (tunnel up), then exits 0
+    # the daemon continues running in the background
 
-- name: Wait for tunnel up
-  run: |
-    for i in $(seq 1 120); do
-      grep -q "OVPN3_TUNNEL_UP" /tmp/ovpn3.log && break
-      [ $i -eq 120 ] && { cat /tmp/ovpn3.log; exit 1; }
-      sleep 5
-    done
-
-- name: Run integration tests
+- name: Check internal service health
   run: curl -sf http://10.130.32.32:5080/healthz
 
-- name: Disconnect
+- name: Disconnect VPN
   if: always()
-  run: sudo kill "$(cat /tmp/openlawsvpn-cli.pid)" 2>/dev/null || true
+  run: sudo kill "$(cat /tmp/openlawsvpn.pid)" 2>/dev/null || true
+
+- name: Upload relay agent log
+  if: always()
+  uses: actions/upload-artifact@v4
+  with:
+    name: vpn-log
+    path: /tmp/openlawsvpn.log
 ```
+
+The `-daemon` flag forks the process to the background once the tunnel is up.
+The foreground step exits 0 as soon as the daemon prints `daemon started (pid N)`,
+so the pipeline sees a clean exit and moves on.
+
+If the app never approves, the foreground step hangs until `timeout-minutes` is
+reached — always set a step-level timeout to get a clean failure.
 
 ---
 
@@ -83,7 +77,7 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 
 | Secret | Value |
 |---|---|
-| `RELAY_TOKEN` | Org token from the `relay-organisations` DynamoDB table |
+| `RELAY_TOKEN` | Org token — obtain from the relay app Settings screen |
 
 ---
 
@@ -101,30 +95,49 @@ GitHub Actions, GitLab CI, CircleCI, Jenkins, and most other CI systems set
 | Flag | Default | Description |
 |---|---|---|
 | `-relay <token>` | — | Org token; enables relay mode |
-| `-relay-endpoint <url>` | `wss://ws.relay.openlawsvpn.com` | Override WS endpoint (e.g. for local testing) |
-| `-agent-id <uuid>` | random | Stable ID across reconnects; persist across runs for a fixed agent label |
+| `-daemon` | false | Fork to background after tunnel up; foreground exits 0 |
+| `-pidfile <path>` | — | Write daemon PID here (for `kill` in cleanup step) |
+| `-logfile <path>` | /dev/null | Redirect daemon output here |
+| `-relay-endpoint <url>` | `wss://ws.relay.openlawsvpn.com` | Override WS endpoint (e.g. local testing) |
+| `-agent-id <uuid>` | random | Stable ID across reconnects; persist for a fixed label in the app |
 | `-hostname <name>` | `os.Hostname()` | Label shown in the app agent list |
-| `-config <path>` | — | Fallback .ovpn profile (optional — app always sends config in payload) |
+
+---
+
+## Remote disconnect
+
+The app (Android or GTK4 GUI) can disconnect the agent at any time via the
+**Disconnect** button on the Relay screen. The daemon exits cleanly (v0.2.8+).
+
+The REST API also supports this directly:
+
+```bash
+curl -X DELETE https://api.relay.openlawsvpn.com/api/v1/session/<session_id>/release \
+  -H "Content-Type: application/json" \
+  -d '{"token":"<org_token>"}'
+```
 
 ---
 
 ## Local testing
 
-Use the in-process relay server to test the pipeline without hitting production:
+Use the in-process relay server to test without hitting production:
 
 ```bash
 # Terminal 1 — local relay server
 go run ./cmd/relay-server -addr :18080
 
-# Terminal 2 — CI agent
-CI=true sudo openlawsvpn-cli -relay testtoken \
+# Terminal 2 — CI agent (foreground for easier debugging; omit -daemon)
+sudo openlawsvpn-cli -relay testtoken \
   -relay-endpoint ws://localhost:18080/ws \
   -config tunnel.ovpn
 
 # Terminal 3 — simulate the app delivering credentials
-curl -s http://localhost:18080/api/v1/agents?token=testtoken
-# pick agent_id from output, then:
-curl -s -X POST http://localhost:18080/api/v1/connect \
-  -d '{"token":"testtoken","agent_id":"<id>"}'
-# use session_id to call /execute with real credentials
+AGENT=$(curl -s 'http://localhost:18080/api/v1/agents?token=testtoken' | jq -r '.[0].agent_id')
+SESSION=$(curl -s -X POST http://localhost:18080/api/v1/connect \
+  -H "Content-Type: application/json" \
+  -d "{\"token\":\"testtoken\",\"agent_id\":\"$AGENT\"}" | jq -r .session_id)
+curl -s -X POST http://localhost:18080/api/v1/session/$SESSION/execute \
+  -H "Content-Type: application/json" \
+  -d '{"ovpn_config":"...","state_id":"...","saml_response":"...","remote_ip":"..."}'
 ```

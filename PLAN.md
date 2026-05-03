@@ -1,127 +1,70 @@
-# go-openvpn3 daemon — implementation plan
+# go-openlawsvpn — Implementation Status
 
-## Goal
+> All tasks in the original daemon plan are complete. This file now serves as
+> a living status reference. See `openlawsvpn-private/ROADMAP.md` for the
+> cross-repo roadmap.
 
-Replace the openvpn3-linux system daemon (OpenVPN Inc, C++) with a pure Go
-daemon built on go-openvpn3. The GUI (`openlawsvpn/gui-gtk`) talks D-Bus to this
-daemon instead of the C++ libopenlawsvpn FFI. Zero C/C++ dependency in the
-final stack.
+---
+
+## Components  (2026-05-03)
+
+| Component | Version | Status |
+|-----------|---------|--------|
+| VPN protocol engine (`client.go`) | v0.2.8 | ✅ Working — full CRV1/SAML, AES-256-GCM, rekey |
+| CLI (`cmd/cli`) | v0.2.8 | ✅ Working — standalone + relay + daemon mode |
+| Daemon (`cmd/daemon`) | v0.2.8 | ✅ Working — D-Bus service, CAP\_NET\_ADMIN via systemd |
+| GTK4 GUI (`gui-gtk/`) | v0.2.8 | ✅ Working — Rust/libadwaita, relay screen, D-Bus proxy |
+| Relay server (`cmd/relay-server`) | v0.2.8 | ✅ Working — local dev/test relay |
+| Android `.aar` (gomobile) | v0.2.8 | ✅ Built by CI via `aar.yml` |
+| RPM packaging | 0.2.8-1 | ✅ Built by COPR |
+
+---
 
 ## Architecture
 
 ```
 [gui-gtk  Rust + GTK4]  ←── D-Bus ──→  [openlawsvpn-daemon  Go]
                                               │
-                                        [go-openvpn3 client.go]
+                                        [go-openlawsvpn client.go]
                                               │
                                         [Linux TUN / netlink / DNS]
+
+[openlawsvpn-cli -relay <token>  Go]  ←── WebSocket ──→  [relay.openlawsvpn.com]
+                                                                   │
+                                                    [Android/Desktop App  REST]
 ```
 
-The daemon runs as a **systemd user service** with `AmbientCapabilities=CAP_NET_ADMIN`.
-The GUI is an unprivileged user process. No Polkit, no setuid, no root required.
+### Daemon D-Bus interface
 
-## D-Bus interface
+Bus: session · Service: `com.openlawsvpn.Daemon` · Object: `/com/openlawsvpn/Daemon`
 
-Bus:      session bus  
-Service:  `com.openlawsvpn.Daemon`  
-Object:   `/com/openlawsvpn/Daemon`  
-Interface: `com.openlawsvpn.Daemon`
+**Methods:** `Connect(profile_path)`, `Disconnect()`, `Status()`, `ConnectRelay(config_path, config_content, agent_id, org_token, relay_url)`
 
-### Methods
+**Signals:** `StateChanged(state, server_ip, assigned_ip)`, `LogLine(line)`, `StatsUpdate(bytes_sent, bytes_recv, uptime_secs)`, `SAMLRequired(url)`
 
-| Method | Signature | Description |
-|--------|-----------|-------------|
-| `Connect` | `(profile_path: s) → ()` | Start connection for the given .ovpn path |
-| `Disconnect` | `() → ()` | Graceful disconnect |
-| `Status` | `() → (state: s, server_ip: s, assigned_ip: s)` | Current state snapshot |
+**States:** `idle` · `connecting` · `waiting_saml` · `relay_delivering` · `relay_connected` · `connected` · `disconnecting` · `error`
 
-### Signals
+---
 
-| Signal | Signature | Description |
-|--------|-----------|-------------|
-| `StateChanged` | `(state: s, server_ip: s, assigned_ip: s)` | Emitted on every state transition |
-| `LogLine` | `(line: s)` | One log line forwarded from the VPN client |
-| `StatsUpdate` | `(bytes_sent: t, bytes_recv: t, uptime_secs: t)` | Periodic traffic stats (every 5 s while connected) |
-| `SAMLRequired` | `(url: s)` | Browser URL for the SAML flow; GUI opens it |
-
-### State strings
-
-`idle` · `connecting` · `waiting_saml` · `connected` · `disconnecting` · `error`
-
-## Repository layout (new files)
+## Relay mode
 
 ```
-go-openvpn3/
-  PLAN.md                    ← this file
-  event.go                   ← EventType, Event, EventFn (new)
-  client.go                  ← add EventFn field + emit calls (modified)
-  cmd/
-    ovpn3/                   ← unchanged
-    daemon/
-      main.go                ← D-Bus daemon entry point
-      service.go             ← DaemonService struct, D-Bus interface impl
-      service_test.go        ← unit tests with mock client
-      openlawsvpn-daemon.service  ← systemd user unit
-  packaging/
-    openlawsvpn.spec         ← RPM spec (daemon + gui subpackages)
+openlawsvpn-cli -relay <token> -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 ```
 
-## Task checklist
+- Agent registers via WebSocket to `wss://ws.relay.openlawsvpn.com`
+- Stands by as `standby`; mobile/desktop app selects it and runs full Phase 1 + SAML
+- App posts credentials to relay; relay pushes `phase2` action to agent over WS
+- Agent executes Phase 2, tunnel up; sends `status=connected` back via WS
+- On server-requested disconnect: tunnel tears down, agent sends `status=standby`, process exits cleanly (v0.2.8)
 
-- [x] Write PLAN.md
-- [x] `event.go` — add `EventType`, `Event`, `EventFn` types
-- [x] `client.go` — add `EventFn` field, emit events from state transitions
-- [x] `cmd/daemon/service.go` — `DaemonService`, D-Bus methods/signals
-- [x] `cmd/daemon/main.go` — entry point, godbus registration, signal loop
-- [x] `cmd/daemon/service_test.go` — unit tests with mock client
-- [x] `cmd/daemon/openlawsvpn-daemon.service` — systemd user unit
-- [x] `packaging/openlawsvpn.spec` — RPM spec
-- [x] `openlawsvpn/gui-gtk` — replace `vpn_service.rs` FFI with D-Bus proxy
-- [x] `openlawsvpn/gui-gtk` — update `Cargo.toml` / `build.rs`
+See `docs/ci-relay.md` for GitHub Actions integration example.
 
-## GUI migration (openlawsvpn/gui-gtk)
+---
 
-Only `vpn_service.rs` changes. Everything else — `main.rs`, `connection/`,
-`log_view.rs`, `tray.rs`, `profile_store.rs`, `saml_server.rs` — is untouched.
+## Known limitations / future work
 
-`VpnEvent`, `VpnState`, `VpnCommand` types are preserved exactly; the internal
-implementation switches from C FFI (`spawn_blocking` + unsafe FFI calls) to
-zbus D-Bus proxy calls and signal subscriptions.
-
-`saml_server.rs` moves to the daemon side; the GUI no longer needs to run the
-ACS server on :35001. The daemon runs it and emits `SAMLRequired` when the URL
-is ready. (The ACS server in `auth/saml` is reused directly.)
-
-`build.rs` loses the bindgen dependency entirely. `Cargo.toml` drops `bindgen`
-from `[build-dependencies]`.
-
-## Privilege model
-
-```
-/usr/libexec/openlawsvpn-daemon   owned root:root, mode 0755
-~/.config/systemd/user/openlawsvpn-daemon.service
-  AmbientCapabilities=CAP_NET_ADMIN
-  CapabilityBoundingSet=CAP_NET_ADMIN
-```
-
-No setuid. No Polkit. The user enables the service once at install:
-```
-systemctl --user enable --now openlawsvpn-daemon
-```
-
-## RPM packaging
-
-Two subpackages built from a single spec:
-
-- `openlawsvpn-daemon` — Go binary + systemd unit + D-Bus service activation file
-- `openlawsvpn-gui` — Rust binary + .desktop + icon
-
-`%post` for `openlawsvpn-daemon` runs `systemctl --user daemon-reload` (best-effort).
-
-## Notes
-
-- The SAML ACS server (:35001) runs inside the daemon, not the GUI.
-- Stats polling: daemon emits `StatsUpdate` every 5 s while connected.
-- The daemon accepts only one active connection at a time; a second `Connect`
-  call while connected is rejected with a D-Bus error.
-- godbus/dbus/v5 is added as a Go dependency.
+- Seccomp-BPF filter for daemon (see `docs/security-architecture.md` §9)
+- Profile mode check — reject world-readable `.ovpn` files
+- SAML token zeroization (Go string type makes this hard)
+- iOS support via gomobile (not started)

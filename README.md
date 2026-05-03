@@ -15,8 +15,9 @@ pipeline in `.github/workflows/aar.yml`.
 | Component | Description |
 |---|---|
 | `cmd/daemon` | `openlawsvpn-daemon` — D-Bus session service; manages the VPN tunnel with CAP\_NET\_ADMIN (no root) |
-| `cmd/ovpn3` | CLI client with SAML flow and reconnect loop |
-| `gui-gtk/` | GTK4 + libadwaita desktop GUI; communicates with the daemon over D-Bus |
+| `cmd/cli` | `openlawsvpn-cli` — CLI client with SAML flow, reconnect loop, and relay agent mode (`-relay`) |
+| `cmd/relay-server` | Local relay server for dev/testing without hitting production |
+| `gui-gtk/` | GTK4 + libadwaita desktop GUI; communicates with the daemon over D-Bus; includes Relay screen |
 
 ## Build
 
@@ -32,8 +33,11 @@ cd gui-gtk && cargo build --release
 ./target/release/openlawsvpn-gui
 
 # Linux CLI (direct, no daemon)
-CGO_ENABLED=0 go build -o ovpn3 ./cmd/cli
-sudo ./ovpn3 -config your.ovpn
+CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
+sudo ./openlawsvpn-cli -config your.ovpn
+
+# Relay agent mode (CI/CD headless auth)
+sudo ./openlawsvpn-cli -relay <org-token> -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 
 # Android .aar (requires gomobile + Android NDK)
 gomobile bind -o go-openlawsvpn.aar -target android -androidapi 31 \
@@ -86,6 +90,7 @@ go test -v -tags=integration -timeout 120s .
 |---|---|---|
 | **CI** (`ci.yml`) | push / PR to `main` | `go build`, `go test -race`, `go vet` |
 | **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, notifies `openlawsvpn-android-go` to open a version-bump PR |
+| **Build RPM** (`rpm.yml`) | push tag `v*` | builds RPM via COPR, publishes to `vorona/openlawsvpn` |
 
 ### Publishing a new release
 
