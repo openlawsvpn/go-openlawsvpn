@@ -91,13 +91,6 @@ impl RelayScreen {
         token_row.set_text(&settings.borrow().org_token);
         prefs_group.add(&token_row);
 
-        let endpoint_row = EntryRow::new();
-        endpoint_row.set_title("Relay URL");
-        endpoint_row.set_show_apply_button(false);
-        // Always show the current URL (default or custom) so the user can see and edit it.
-        endpoint_row.set_text(&settings.borrow().relay_url);
-        prefs_group.add(&endpoint_row);
-
         let save_btn = Button::with_label("Save & Refresh");
         save_btn.set_css_classes(&["pill", "suggested-action"]);
         save_btn.set_margin_start(16);
@@ -183,18 +176,12 @@ impl RelayScreen {
         {
             let sc = screen.clone();
             let token_row = token_row.clone();
-            let endpoint_row = endpoint_row.clone();
             save_btn.connect_clicked(move |_| {
                 let token = token_row.text().to_string();
-                let url_text = endpoint_row.text().to_string().trim().to_string();
-                let relay_url = if url_text.is_empty() {
-                    DEFAULT_RELAY_URL.to_string()
-                } else {
-                    url_text
+                let new_settings = RelaySettings {
+                    org_token: token,
+                    relay_url: DEFAULT_RELAY_URL.to_string(),
                 };
-                // Update the URL field to show what was actually saved.
-                endpoint_row.set_text(&relay_url);
-                let new_settings = RelaySettings { org_token: token, relay_url };
                 sc.borrow().settings.replace(new_settings.clone());
                 new_settings.save();
                 sc.borrow().refresh_agents();
@@ -293,7 +280,7 @@ impl RelayScreen {
         // back via a oneshot channel. glib::spawn_future_local can then await it
         // without needing a Tokio runtime on the GTK main thread.
         let (tx, rx) = futures_channel::oneshot::channel::<Result<Vec<AgentInfo>, String>>();
-        let url = format!("{}/agents?token={}", relay_url, urlencoding::encode(&token));
+        let url = format!("{}/agents", relay_url);
         std::thread::spawn(move || {
             let ua = format!(
                 "openlawsvpn/{} (linux-gtk; {})",
@@ -306,6 +293,7 @@ impl RelayScreen {
                 .map_err(|e| e.to_string())
                 .and_then(|c| {
                     c.get(&url)
+                        .header("Authorization", format!("Bearer {token}"))
                         .send()
                         .and_then(|r| r.error_for_status())
                         .and_then(|r| r.json::<Vec<AgentInfo>>())

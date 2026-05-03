@@ -3,18 +3,24 @@
   <!-- App background: rounded square, brand dark -->
   <rect width="128" height="128" rx="22" ry="22" fill="#0d1117"/>
 
-  <!-- Shield body -->
-  <path d="M64 18 L96 30 L96 62 C96 82 80 98 64 108 C48 98 32 82 32 62 L32 30 Z"
-        fill="#1c2128" stroke="#f78166" stroke-width="3" stroke-linejoin="round"/>
+  <!-- Heart (filled, brand red) — openlaws=openlove, matches tray connected icon -->
+  <path d="M64 98
+           C48 88 20 72 20 48
+           C20 34 30 24 42 24
+           C50 24 58 28 64 36
+           C70 28 78 24 86 24
+           C98 24 108 34 108 48
+           C108 72 80 88 64 98 Z"
+        fill="#e53935"/>
 
-  <!-- Lock body -->
-  <rect x="52" y="62" width="24" height="18" rx="3" ry="3" fill="#f78166"/>
+  <!-- Lock body — centred on the heart -->
+  <rect x="52" y="56" width="24" height="18" rx="3" ry="3" fill="#0d1117"/>
 
   <!-- Lock shackle -->
-  <path d="M56 62 L56 54 C56 47 72 47 72 54 L72 62"
-        fill="none" stroke="#f78166" stroke-width="4" stroke-linecap="round"/>
+  <path d="M56 56 L56 48 C56 41 72 41 72 48 L72 56"
+        fill="none" stroke="#0d1117" stroke-width="4" stroke-linecap="round"/>
 
   <!-- Keyhole -->
-  <circle cx="64" cy="70" r="3" fill="#0d1117"/>
-  <rect x="62.5" y="70" width="3" height="5" rx="1" fill="#0d1117"/>
+  <circle cx="64" cy="64" r="3" fill="#e53935"/>
+  <rect x="62.5" y="64" width="3" height="5" rx="1" fill="#e53935"/>
 </svg>

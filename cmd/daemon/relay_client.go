@@ -21,10 +21,9 @@ var relayHTTP = &http.Client{Timeout: relayHTTPTimeout}
 // relayConnect calls POST /connect and returns the session_id.
 func relayConnect(baseURL, orgToken, agentID string) (string, error) {
 	body, _ := json.Marshal(map[string]string{
-		"token":    orgToken,
 		"agent_id": agentID,
 	})
-	resp, err := relayPost(baseURL+"/connect", body)
+	resp, err := relayPost(baseURL+"/connect", orgToken, body)
 	if err != nil {
 		return "", err
 	}
@@ -36,28 +35,27 @@ func relayConnect(baseURL, orgToken, agentID string) (string, error) {
 }
 
 // relayExecute calls POST /session/:id/execute to deliver Phase 2 credentials.
-func relayExecute(baseURL, sessionID, ovpnConfig, stateID, samlResponse, remoteIP string) error {
+func relayExecute(baseURL, orgToken, sessionID, ovpnConfig, stateID, samlResponse, remoteIP string) error {
 	body, _ := json.Marshal(map[string]string{
 		"ovpn_config":   ovpnConfig,
 		"state_id":      stateID,
 		"saml_response": samlResponse,
 		"remote_ip":     remoteIP,
 	})
-	_, err := relayPost(fmt.Sprintf("%s/session/%s/execute", baseURL, sessionID), body)
+	_, err := relayPost(fmt.Sprintf("%s/session/%s/execute", baseURL, sessionID), orgToken, body)
 	return err
 }
 
-// relayRelease calls DELETE /session/:id/release to tell the relay to push
-// a disconnect action to the remote agent.
+// relayRelease calls DELETE /session/:id/release to push a disconnect to the agent.
 func relayRelease(baseURL, orgToken, sessionID string) error {
-	body, _ := json.Marshal(map[string]string{"token": orgToken})
 	req, err := http.NewRequest(http.MethodDelete,
 		fmt.Sprintf("%s/session/%s/release", baseURL, sessionID),
-		bytes.NewReader(body))
+		bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return fmt.Errorf("relay: build release request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+orgToken)
 	res, err := relayHTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("relay: DELETE release: %w", err)
@@ -70,12 +68,32 @@ func relayRelease(baseURL, orgToken, sessionID string) error {
 	return nil
 }
 
-func relayPost(url string, body []byte) (map[string]interface{}, error) {
+// relayListAgents calls GET /agents and returns the raw JSON body.
+func relayListAgents(baseURL, orgToken string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/agents", nil)
+	if err != nil {
+		return nil, fmt.Errorf("relay: build agents request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+orgToken)
+	res, err := relayHTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("relay: GET agents: %w", err)
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("relay: GET agents HTTP %d — %s", res.StatusCode, string(raw))
+	}
+	return raw, nil
+}
+
+func relayPost(url, orgToken string, body []byte) (map[string]interface{}, error) {
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("relay: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+orgToken)
 
 	res, err := relayHTTP.Do(req)
 	if err != nil {

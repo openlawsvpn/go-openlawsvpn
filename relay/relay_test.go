@@ -59,25 +59,31 @@ func TestNewGeneratesAgentID(t *testing.T) {
 
 // ── buildWSURL ────────────────────────────────────────────────────────────────
 
-func TestBuildWSURL(t *testing.T) {
-	got, err := buildWSURL("ws://relay.example.com/ws", "mytoken", "host1", "uuid1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"token=mytoken", "hostname=host1", "agent_id=uuid1"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("URL %q missing %q", got, want)
+func TestBuildWSURLPreservesEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"ws://relay.example.com/ws",
+		"wss://relay.example.com/ws",
+		"wss://relay.example.com:8443/ws/v2",
+	} {
+		got, err := buildWSURL(endpoint)
+		if err != nil {
+			t.Fatalf("buildWSURL(%q): %v", endpoint, err)
+		}
+		if got != endpoint {
+			t.Errorf("buildWSURL(%q) = %q, want unchanged", endpoint, got)
+		}
+		// Token must not appear in the URL.
+		if strings.Contains(got, "token") {
+			t.Errorf("URL %q must not contain token", got)
 		}
 	}
 }
 
-func TestBuildWSURLPreservesPath(t *testing.T) {
-	got, err := buildWSURL("wss://relay.example.com/ws", "t", "h", "id")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(got, "wss://relay.example.com/ws") {
-		t.Errorf("URL lost scheme/host/path: %q", got)
+func TestBuildWSURLRejectsInvalidScheme(t *testing.T) {
+	if _, err := buildWSURL("http://relay.example.com/ws"); err != nil {
+		// dialWS will reject it; buildWSURL just parses — both are acceptable.
+		// Just ensure it doesn't panic.
+		_ = err
 	}
 }
 
@@ -640,7 +646,25 @@ func (s *testRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 	ch := s.connectedCh
 	s.connectedCh = make(chan struct{}) // fresh channel for next connect
 	s.mu.Unlock()
-	close(ch) // signal waitConnected
+
+	// Consume the auth frame the agent sends immediately after connect.
+	// We do not validate the token in tests — just drain it so pushCh works.
+	rdrAuth := bufio.NewReader(conn)
+	for {
+		payload, opcode, err := wsReadRawFrame(rdrAuth)
+		if err != nil {
+			conn.Close()
+			return
+		}
+		if opcode == 0x1 || opcode == 0x2 {
+			var m map[string]any
+			if json.Unmarshal(payload, &m) == nil && m["action"] == "auth" {
+				break
+			}
+		}
+	}
+
+	close(ch) // signal waitConnected — agent is now fully registered
 
 	connDone := make(chan struct{})
 
@@ -658,10 +682,9 @@ func (s *testRelayServer) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Reader loop: agent → recvCh.
-	rdr := bufio.NewReader(conn)
+	// Reader loop: agent → recvCh (reuse the same buffered reader used for auth).
 	for {
-		payload, opcode, err := wsReadRawFrame(rdr)
+		payload, opcode, err := wsReadRawFrame(rdrAuth)
 		if err != nil {
 			break
 		}

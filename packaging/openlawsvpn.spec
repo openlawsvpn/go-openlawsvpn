@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        0.2.9
-Release:        2%{?dist}
+Version:        1.0.0
+Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): LGPL-2.1-or-later
@@ -194,6 +194,23 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.0-1
+- security: relay WS token moved from URL to auth frame (BC1)
+- security: relay HTTP API uses Authorization: Bearer header on all routes (F4)
+- security: session ownership check on /execute — prevents cross-org credential delivery (F3)
+- security: relay-pending DDB table with 60s TTL for unauthenticated WS connections
+- security: agent_id regex validation and hostname truncation (F6)
+- security: payload size limits on /execute — 32 KB ovpn_config, 64 KB saml_response (F8)
+- security: disable raw execute-api endpoint on HTTP API (F9)
+- security: WS API access logging enabled with 30-day CloudWatch retention (F10)
+- security: agent log output scrubbed for passwords/secrets/saml/keys (F13)
+- security: CloudWatch alarm relay-ws-auth-failures-high — fires at >=20 4001s per 5 min (F14)
+- security: crypto/rand for UUID, wsKey, and WS mask key generation (BC4)
+- security: protocol version field in all agent<->server messages (BC3)
+- gui: app icon changed to heart+lock design (openlaws=openlove)
+- relay: remove custom relay URL input from GUI and Android — hardcoded to production endpoint
+  Use OPENLAWSVPN_RELAY_URL env var for local testing
+
 * Sun May  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 0.2.9-1
 - license: change from BSL-1.1 to LGPL-2.1-or-later + usage exception
 - gui: add dedicated app icon (com.openlawsvpn.gui.svg) — shield+lock design in brand colors

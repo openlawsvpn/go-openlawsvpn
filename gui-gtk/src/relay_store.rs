@@ -8,12 +8,9 @@ pub const DEFAULT_RELAY_URL: &str = "https://api.relay.openlawsvpn.com/api/v1";
 pub struct RelaySettings {
     #[serde(default)]
     pub org_token: String,
-    #[serde(default = "default_relay_url")]
+    // relay_url is always the production default; not user-configurable.
+    #[serde(skip)]
     pub relay_url: String,
-}
-
-fn default_relay_url() -> String {
-    DEFAULT_RELAY_URL.to_string()
 }
 
 impl Default for RelaySettings {
@@ -27,10 +24,13 @@ impl Default for RelaySettings {
 
 impl RelaySettings {
     pub fn load() -> Self {
-        std::fs::read_to_string(settings_path())
+        let mut s: Self = std::fs::read_to_string(settings_path())
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        s.relay_url = std::env::var("OPENLAWSVPN_RELAY_URL")
+            .unwrap_or_else(|_| DEFAULT_RELAY_URL.to_string());
+        s
     }
 
     pub fn save(&self) {

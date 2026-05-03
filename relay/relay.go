@@ -25,17 +25,21 @@ package relay
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
+
+// protocolVersion is included in every agent→server message so the backend can
+// serve mixed old/new agents safely during rolling deployments.
+const protocolVersion = 1
 
 // Phase2Payload is the credential bundle delivered by the relay server.
 // It contains everything the agent needs to execute OpenVPN Phase 2.
@@ -131,7 +135,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // runOnce connects, registers, and reads messages until the connection breaks.
 func (a *Agent) runOnce(ctx context.Context) error {
-	u, err := buildWSURL(a.cfg.Endpoint, a.cfg.Token, a.cfg.Hostname, a.agentID)
+	u, err := buildWSURL(a.cfg.Endpoint)
 	if err != nil {
 		return fmt.Errorf("relay: build URL: %w", err)
 	}
@@ -141,6 +145,20 @@ func (a *Agent) runOnce(ctx context.Context) error {
 		return fmt.Errorf("relay: dial: %w", err)
 	}
 	defer ws.close()
+
+	// Send auth frame first — token travels in the WS body, not in the URL,
+	// so it does not appear in API Gateway access logs.
+	authMsg := map[string]any{
+		"version":  protocolVersion,
+		"action":   "auth",
+		"token":    a.cfg.Token,
+		"agent_id": a.agentID,
+		"hostname": a.cfg.Hostname,
+	}
+	authBytes, _ := json.Marshal(authMsg)
+	if err := ws.sendText(ctx, authBytes); err != nil {
+		return fmt.Errorf("relay: send auth: %w", err)
+	}
 
 	a.mu.Lock()
 	a.connWS = ws
@@ -195,6 +213,7 @@ func (a *Agent) runOnce(ctx context.Context) error {
 
 func (a *Agent) handleMessage(ctx context.Context, msg []byte) error {
 	var envelope struct {
+		Version   int             `json:"version"`
 		Action    string          `json:"action"`
 		SessionID string          `json:"session_id"`
 		Payload   json.RawMessage `json:"payload"`
@@ -244,6 +263,7 @@ func (a *Agent) sendStatus(ctx context.Context, sessionID, status, assignedIP st
 		return
 	}
 	msg := map[string]any{
+		"version":     protocolVersion,
 		"action":      "status",
 		"session_id":  sessionID,
 		"org":         a.cfg.Token,
@@ -465,8 +485,8 @@ func (w *wsConn) sendFrame(ctx context.Context, opcode byte, payload []byte) err
 
 	// Client frames must be masked (RFC 6455 §5.3).
 	var maskKey [4]byte
-	for i := range maskKey {
-		maskKey[i] = byte(rand.IntN(256))
+	if _, err := rand.Read(maskKey[:]); err != nil {
+		panic(fmt.Sprintf("relay: crypto/rand unavailable: %v", err))
 	}
 
 	n := len(payload)
@@ -499,24 +519,21 @@ func (w *wsConn) sendFrame(ctx context.Context, opcode byte, payload []byte) err
 // Helpers
 // ---------------------------------------------------------------------------
 
-func buildWSURL(endpoint, token, hostname, agentID string) (string, error) {
-	u, err := url.Parse(endpoint)
+func buildWSURL(endpoint string) (string, error) {
+	// All registration data (token, hostname, agent_id) is sent in the auth frame,
+	// not in the URL, so nothing sensitive appears in server-side access logs.
+	_, err := url.Parse(endpoint)
 	if err != nil {
 		return "", err
 	}
-	q := u.Query()
-	q.Set("token", token)
-	q.Set("hostname", hostname)
-	q.Set("agent_id", agentID)
-	u.RawQuery = q.Encode()
-	return u.String(), nil
+	return endpoint, nil
 }
 
-// newUUID returns a random UUID v4 string.
+// newUUID returns a cryptographically random UUID v4 string.
 func newUUID() string {
 	var b [16]byte
-	for i := range b {
-		b[i] = byte(rand.IntN(256))
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("relay: crypto/rand unavailable: %v", err))
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant bits
@@ -527,8 +544,8 @@ func newUUID() string {
 // wsKey returns a random base64 Sec-WebSocket-Key value (RFC 6455 §4.1).
 func wsKey() string {
 	var b [16]byte
-	for i := range b {
-		b[i] = byte(rand.IntN(256))
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("relay: crypto/rand unavailable: %v", err))
 	}
 	return base64.StdEncoding.EncodeToString(b[:])
 }

@@ -387,7 +387,7 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 
 		// Phase1IP() is the sticky remote VPN server IP captured during Phase 1.
 		remoteIP := client.Phase1IP()
-		if err := relayExecute(relayBaseURL, sessionID, profileContent,
+		if err := relayExecute(relayBaseURL, orgToken, sessionID, profileContent,
 			cap.stateID, cap.samlToken, remoteIP); err != nil {
 			log.Printf("relay: execute: %v", err)
 			d.emitLogLine(fmt.Sprintf("relay: deliver credentials: %v", err))

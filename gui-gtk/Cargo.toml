@@ -1,6 +1,6 @@
 [package]
 name = "openlawsvpn-gui"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "GTK4 + libadwaita GUI for openlawsvpn"
 license = "LGPL-2.1-or-later"
@@ -29,4 +29,3 @@ futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 zbus = { version = "5", features = ["tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
-urlencoding = "2"
