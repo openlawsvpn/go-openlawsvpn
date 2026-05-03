@@ -68,6 +68,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	vpn "github.com/openlawsvpn/go-openlawsvpn"
@@ -133,7 +134,7 @@ func main() {
 			}
 			fallbackProfile = fp
 		}
-		runRelayMode(ctx, fallbackProfile, relay.Config{
+		runRelayMode(ctx, stop, fallbackProfile, relay.Config{
 			Token:    *relayToken,
 			Hostname: hostname,
 			AgentID:  *relayAgentID,
@@ -348,7 +349,7 @@ func isPermissionError(err error) bool {
 // Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
 // runRelayMode starts the relay agent. fallback may be nil — the app always sends
 // ovpn_config in the phase2 payload, so a local profile is not required.
-func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Config, readyFD int) {
+func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, cfg relay.Config, readyFD int) {
 	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
 
 	// agentPtr is set just after relay.New returns so the OnPhase2 closure can
@@ -360,14 +361,22 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 	var activeClientMu sync.Mutex
 	var activeClient *vpn.Client
 
+	// serverDisconnect is set to true when disconnect originates from the relay
+	// server, so OnPhase2 can suppress the spurious write error from the closed
+	// UDP socket and the process can exit cleanly.
+	var serverDisconnect atomic.Bool
+
 	cfg.OnDisconnect = func() {
 		activeClientMu.Lock()
 		c := activeClient
 		activeClientMu.Unlock()
 		if c != nil {
 			fmt.Fprintln(os.Stderr, "openlawsvpn-cli: relay: server requested disconnect")
+			serverDisconnect.Store(true)
 			c.Disconnect() //nolint:errcheck
 		}
+		// Cancel the agent Run loop so the process exits instead of reconnecting.
+		stop()
 	}
 
 	cfg.OnPhase2 = func(phaseCtx context.Context, payload relay.Phase2Payload) error {
@@ -422,6 +431,12 @@ func runRelayMode(ctx context.Context, fallback *profile.Profile, cfg relay.Conf
 		// Tell the relay the agent is now idle so the app sees "standby" immediately.
 		if agentPtr != nil {
 			agentPtr.SendStatus(ctx, payload.SessionID, "standby", "")
+		}
+
+		// Suppress the write error caused by our own Disconnect() closing the UDP
+		// socket mid-write — this is a normal shutdown path, not a real failure.
+		if serverDisconnect.Load() {
+			return nil
 		}
 		return err
 	}
