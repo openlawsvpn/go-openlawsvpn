@@ -281,6 +281,7 @@ impl RelayScreen {
         // without needing a Tokio runtime on the GTK main thread.
         let (tx, rx) = futures_channel::oneshot::channel::<Result<Vec<AgentInfo>, String>>();
         let url = format!("{}/agents", relay_url);
+        let token_http = token.clone();
         std::thread::spawn(move || {
             let ua = format!(
                 "openlawsvpn/{} (linux-gtk; {})",
@@ -293,7 +294,7 @@ impl RelayScreen {
                 .map_err(|e| e.to_string())
                 .and_then(|c| {
                     c.get(&url)
-                        .header("Authorization", format!("Bearer {token}"))
+                        .header("Authorization", format!("Bearer {token_http}"))
                         .send()
                         .and_then(|r| r.error_for_status())
                         .and_then(|r| r.json::<Vec<AgentInfo>>())
