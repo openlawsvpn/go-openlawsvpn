@@ -2,7 +2,7 @@
 %global debug_package %{nil}
 Name:           openlawsvpn
 Version:        1.0.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): LGPL-2.1-or-later
@@ -18,6 +18,7 @@ Source0:        {{{ git_repo_pack }}}
 
 BuildRequires:  golang >= 1.21
 BuildRequires:  cargo-rpm-macros
+BuildRequires:  systemd-rpm-macros
 
 %description
 AWS Client VPN client with full SAML/SSO support.
@@ -194,6 +195,9 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon May  4 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.4-2
+- spec: add BuildRequires systemd-rpm-macros to fix _unitdir/_presetdir expansion in %%files
+
 * Mon May  4 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.4-1
 - gui: downgrade gtk4 → 0.10 and libadwaita → 0.7 for FC43 COPR compatibility
 
