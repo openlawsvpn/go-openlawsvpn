@@ -1,6 +1,6 @@
 [package]
 name = "openlawsvpn-gui"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
 description = "GTK4 + libadwaita GUI for openlawsvpn"
 license = "LGPL-2.1-or-later"
@@ -17,8 +17,8 @@ codegen-units = 16
 lto = "thin"
 
 [dependencies]
-gtk4 = { version = "0.11", features = ["v4_10"] }
-libadwaita = { version = "0.9", features = ["v1_5"] }
+gtk4 = { version = "0.9", features = ["v4_10"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
