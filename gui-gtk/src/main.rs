@@ -195,12 +195,16 @@ fn build_ui(app: &Application) {
                     let is_relay_specific = matches!(state,
                         VpnState::RelayDelivering { .. } | VpnState::RelayConnected { .. }
                     );
+                    // Capture before clearing so that a terminal Idle/Error emitted
+                    // after a relay flow still routes to the relay screen — letting
+                    // set_relay_state(Idle) clear the "connected" flag there.
+                    let was_in_relay_flow = *in_relay_flow.borrow();
                     if is_relay_specific {
                         *in_relay_flow.borrow_mut() = true;
                     } else if matches!(state, VpnState::Idle | VpnState::Error(_)) {
                         *in_relay_flow.borrow_mut() = false;
                     }
-                    let is_relay = is_relay_specific || *in_relay_flow.borrow();
+                    let is_relay = is_relay_specific || was_in_relay_flow;
                     // Open browser for SAML — applies to both local and relay flows.
                     if let VpnState::WaitingSaml { ref saml_url } = state {
                         if !saml_url.is_empty() {

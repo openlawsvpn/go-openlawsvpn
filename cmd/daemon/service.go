@@ -331,6 +331,10 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 			d.client = nil
 			d.cancel = nil
 			d.profilePath = ""
+			// Reset VPN client state so Status() returns "idle" after the relay
+			// flow, not the stale pre-suppression state (e.g. "connecting" or
+			// "waiting_saml"), which would freeze the Connect tab on GUI restart.
+			d.state = vpn.StateIdle
 			d.mu.Unlock()
 		}()
 
