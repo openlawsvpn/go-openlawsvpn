@@ -30,6 +30,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -330,7 +331,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	if c.prof.RandomHostname {
 		host = randomSubdomain(host)
 	}
-	addr := fmt.Sprintf("%s:%d", host, c.prof.Port)
+	addr := net.JoinHostPort(host, strconv.Itoa(c.prof.Port))
 	rawConn, err := c.dialWithContext(ctx, c.prof.Proto, addr)
 	if err != nil {
 		c.setDisconnected(err)
@@ -553,7 +554,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 				host = randomSubdomain(host)
 			}
 		}
-		addr := fmt.Sprintf("%s:%d", host, c.prof.Port)
+		addr := net.JoinHostPort(host, strconv.Itoa(c.prof.Port))
 		rawConn2, err := c.dialWithContext(ctx, c.prof.Proto, addr)
 		if err != nil {
 			c.setDisconnected(err)

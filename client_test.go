@@ -2,6 +2,7 @@ package vpn_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	vpn "github.com/openlawsvpn/go-openlawsvpn"
@@ -172,5 +173,45 @@ func TestSetRelayPhase2(t *testing.T) {
 	// LocalIP is still empty until Phase 2 completes.
 	if ip := c2.LocalIP(); ip != "" {
 		t.Errorf("LocalIP after SetRelayPhase2 = %q, want empty", ip)
+	}
+}
+
+// TestConnectIPv6RemoteNoTooManyColons verifies Phase 1 address construction
+// handles IPv6 literals correctly. The context is canceled to avoid real
+// network waits; this still exercises dial target formatting.
+func TestConnectIPv6RemoteNoTooManyColons(t *testing.T) {
+	p, err := profile.ParseString("remote 2001:db8:7c3a:91f2:4e6b:2d10:a8c4:5f39\n1194\nproto udp\n")
+	if err != nil {
+		t.Fatalf("parse profile: %v", err)
+	}
+	c := vpn.New(p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = c.Connect(ctx)
+	if err == nil {
+		t.Fatal("expected connect error")
+	}
+	if strings.Contains(err.Error(), "too many colons in address") {
+		t.Fatalf("IPv6 address formatting regression: %v", err)
+	}
+}
+
+// TestConnectPhase2IPv6Phase1IPNoTooManyColons verifies Phase 2 dial target
+// construction handles an IPv6 Phase1 IP literal correctly.
+func TestConnectPhase2IPv6Phase1IPNoTooManyColons(t *testing.T) {
+	c := vpn.New(makeTestProfile())
+	c.SetRelayPhase2("2001:db8:7c3a:91f2:4e6b:2d10:a8c4:5f39", "state-xyz")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := c.ConnectPhase2(ctx, "token")
+	if err == nil {
+		t.Fatal("expected Phase2 connect error")
+	}
+	if strings.Contains(err.Error(), "too many colons in address") {
+		t.Fatalf("IPv6 address formatting regression: %v", err)
 	}
 }
