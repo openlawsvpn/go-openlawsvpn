@@ -351,7 +351,7 @@ func TestAgentReceivesPhase2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	go agent.Run(ctx) //nolint:errcheck
+	runAgent(t, ctx, agent)
 
 	// Wait for the agent to connect, then push a phase2 message.
 	srv.waitConnected(t, 3*time.Second)
@@ -415,7 +415,7 @@ func TestAgentSendStatusConnected(t *testing.T) {
 	agentRef = agent
 	agentMu.Unlock()
 
-	go agent.Run(ctx) //nolint:errcheck
+	runAgent(t, ctx, agent)
 
 	srv.waitConnected(t, 3*time.Second)
 	srv.pushPhase2("sess-status", "sid", "tok", "10.0.0.1", "")
@@ -466,7 +466,7 @@ func TestAgentReconnects(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	go agent.Run(ctx) //nolint:errcheck
+	runAgent(t, ctx, agent)
 
 	// Wait for first connect.
 	select {
@@ -792,3 +792,17 @@ func readFull(rdr *bufio.Reader, buf []byte) (int, error) {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 var nopPhase2 = func(_ context.Context, _ Phase2Payload) error { return nil }
+
+// runAgent starts agent.Run in a goroutine and registers a t.Cleanup that
+// waits for it to exit. This prevents t.Log calls from racing against test
+// teardown when the goroutine outlives the test function.
+func runAgent(t *testing.T, ctx context.Context, a *Agent) {
+	t.Helper()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		a.Run(ctx) //nolint:errcheck
+	}()
+	t.Cleanup(wg.Wait)
+}
