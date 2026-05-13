@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.4
-Release:        3%{?dist}
+Version:        1.0.5
+Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
 # Source (daemon + protocol engine): LGPL-2.1-or-later
@@ -195,6 +195,11 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Tue May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
+- fix(client): use net.JoinHostPort for IPv6 endpoint construction (PR#2)
+  Replaces fmt.Sprintf("%s:%d") which produced invalid addresses for IPv6
+  literals causing "too many colons in address" dial errors
+
 * Thu May  7 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.4-3
 - daemon: reset state to idle after relay flow so Status() does not return stale state
 - gui: route terminal states (idle/error) to relay screen when disconnecting a relay session
