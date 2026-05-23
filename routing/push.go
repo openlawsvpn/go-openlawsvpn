@@ -285,25 +285,33 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			}
 
 		case "route":
-			// route <network> <mask> [gateway]
-			if len(parts) < 3 {
-				return nil, fmt.Errorf("routing: route: expected network and mask, got %d arg(s)", len(parts)-1)
+			// route <network> [<mask> [gateway]]
+			// A single-arg form (no mask) is a host route (/32), pushed by
+			// stock OpenVPN CE in net30 topology for the P2P peer address.
+			if len(parts) < 2 {
+				return nil, fmt.Errorf("routing: route: expected at least a network address, got 0 arg(s)")
 			}
 			netIP := net.ParseIP(parts[1])
 			if netIP == nil {
 				return nil, fmt.Errorf("routing: route: invalid network %q", parts[1])
 			}
-			maskIP := net.ParseIP(parts[2])
-			if maskIP == nil {
-				return nil, fmt.Errorf("routing: route: invalid mask %q", parts[2])
-			}
-			mask4 := maskIP.To4()
-			if mask4 == nil {
-				return nil, fmt.Errorf("routing: route: mask must be IPv4, got %q", parts[2])
+			var routeMask net.IPMask
+			if len(parts) >= 3 {
+				maskIP := net.ParseIP(parts[2])
+				if maskIP == nil {
+					return nil, fmt.Errorf("routing: route: invalid mask %q", parts[2])
+				}
+				mask4 := maskIP.To4()
+				if mask4 == nil {
+					return nil, fmt.Errorf("routing: route: mask must be IPv4, got %q", parts[2])
+				}
+				routeMask = net.IPMask(mask4)
+			} else {
+				routeMask = net.CIDRMask(32, 32)
 			}
 			r := Route{
 				Network: netIP.To4(),
-				Mask:    net.IPMask(mask4),
+				Mask:    routeMask,
 			}
 			if len(parts) >= 4 {
 				gw := net.ParseIP(parts[3])

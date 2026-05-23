@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.5
+Version:        1.0.6
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -195,6 +195,13 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May 24 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.6-1
+- feat(client): support standard OpenVPN CE wire format for cert/user-pass auth
+  Enables connecting to stock OpenVPN CE servers (e.g. QA test server) without SAML.
+  AWS Client VPN behaviour is unchanged — format selected based on DetectFlow().
+- fix(routing): accept single-arg route directives (no mask) as /32 host routes
+  Stock OpenVPN CE pushes "route <peer-ip>" in net30 topology; was fatal parse error.
+
 * Tue May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
 - fix(client): use net.JoinHostPort for IPv6 endpoint construction (PR#2)
   Replaces fmt.Sprintf("%s:%d") which produced invalid addresses for IPv6

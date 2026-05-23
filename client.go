@@ -193,6 +193,12 @@ type Client struct {
 	// goroutines — must not block. Set before calling Connect.
 	EventFn EventFn
 
+	// awsFormat is true when the profile targets AWS Client VPN (FlowAWSSSO).
+	// It selects the AWS-patched key_method_2 wire format (uint32_be length
+	// prefixes + uint32_le total-length header) instead of the standard
+	// stock-OpenVPN format (uint16_be length prefixes, no total-length header).
+	awsFormat bool
+
 	// reconnect
 	// MaxReconnects is the maximum number of reconnect attempts before giving
 	// up. A value of 0 means unlimited retries. Default is 0 (unlimited).
@@ -263,6 +269,7 @@ func New(p *profile.Profile) *Client {
 // Connect is not safe for concurrent use.
 func (c *Client) Connect(ctx context.Context) error {
 	flow := c.prof.DetectFlow()
+	c.awsFormat = flow == profile.FlowAWSSSO
 
 	c.emit(Event{Type: EventStateChanged, State: StateConnecting})
 
@@ -405,7 +412,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	// Send OpenVPN auth packet over TLS.
 	// Per openvpn3-core cliproto.hpp: client sends auth, then reads server auth,
 	// then waits for ACTIVE state (auth ACKs exchanged), THEN sends PUSH_REQUEST.
-	if err := sendAuthPacket(tlsConn, c.prof.Proto, "N/A", "ACS::35001"); err != nil {
+	if err := sendAuthPacket(tlsConn, c.prof.Proto, "N/A", "ACS::35001", c.awsFormat); err != nil {
 		rawConn.Close()
 		c.setDisconnected(err)
 		return nil, fmt.Errorf("vpn: send auth packet: %w", err)
@@ -416,7 +423,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	// full auth exchange (client auth → server auth → ACKs) completes first,
 	// matching the C++ ACTIVE-state gate that guards send_push_request_callback().
 	tlsConn.SetDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
-	if err := consumeServerAuthPacket(tlsConn); err != nil {
+	if err := consumeServerAuthPacket(tlsConn, c.awsFormat); err != nil {
 		rawConn.Close()
 		c.setDisconnected(err)
 		return nil, fmt.Errorf("vpn: read server auth packet: %w", err)
@@ -604,14 +611,14 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.tlsRW = tlsConn2
 
 		// Per openvpn3-core cliproto.hpp: auth → server auth → PUSH_REQUEST.
-		if err := sendAuthPacket(tlsConn2, c.prof.Proto, "N/A", crv1Password); err != nil {
+		if err := sendAuthPacket(tlsConn2, c.prof.Proto, "N/A", crv1Password, c.awsFormat); err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
 			return fmt.Errorf("vpn: Phase2 send auth: %w", err)
 		}
 
 		tlsConn2.SetDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
-		if err := consumeServerAuthPacket(tlsConn2); err != nil {
+		if err := consumeServerAuthPacket(tlsConn2, c.awsFormat); err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
 			return fmt.Errorf("vpn: Phase2 read server auth packet: %w", err)
@@ -1155,124 +1162,135 @@ func buildTunnelOptions(proto profile.Proto) string {
 // IV_CIPHERS lists GCM ciphers the client supports.
 const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=8094\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
 
-// sendAuthPacket sends the OpenVPN3 key-method-2 auth packet over the TLS
+// sendAuthPacket sends the OpenVPN key-method-2 auth packet over the TLS
 // connection immediately after the TLS handshake completes.
 //
-// AWS Client VPN uses a patched OpenVPN where the large-token wire format
-// differs from stock OpenVPN in two ways (ssl.c patch):
+// When awsFormat is true, the AWS Client VPN patched wire format is used:
+//  1. String length prefixes are uint32_be (4 bytes) — required because SAML
+//     tokens exceed the uint16 range.
+//  2. The first 4 bytes are the total payload length as uint32_le
+//     (key_method_2_write patch in AWS ssl.c).
 //
-//  1. String length prefixes are uint32_be (4 bytes) instead of uint16_be (2
-//     bytes) — required because SAML tokens exceed 65535 bytes.
-//
-//  2. The first 4 bytes of the packet are overwritten with the total payload
-//     length as a uint32_le value (key_method_2_write: memcpy(buf->data,
-//     &length, sizeof(length))).
-//
-// Wire format (AWS patched ssl.c, key_method_2_write):
+// Wire format — AWS (awsFormat=true):
 //
 //	[total_len uint32_le]         first 4 bytes = total packet length (LE)
-//	[0x02]                        key_method byte (byte 4)
-//	[pre_master   48B]            client random
-//	[random1      32B]            client random
-//	[random2      32B]            client random  (112 bytes total TLSPRF)
-//	[uint32_be(len+1)][options\0] tunnel options string
+//	[0x02]                        key_method byte
+//	[pre_master 48B][random1 32B][random2 32B]   112 bytes client TLSPRF
+//	[uint32_be(len+1)][options\0]
 //	[uint32_be(len+1)][username\0]
 //	[uint32_be(len+1)][password\0]
 //	[uint32_be(len+1)][peer_info\0]
-func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string) error {
-	// Build the variable portion first so we know the total length.
+//
+// Wire format — stock OpenVPN CE (awsFormat=false):
+//
+//	[0x00 0x00 0x00 0x00]         literal zero prefix (key_method_2 legacy header)
+//	[0x02]                        key_method byte
+//	[pre_master 48B][random1 32B][random2 32B]   112 bytes client TLSPRF
+//	[uint16_be(len+1)][options\0]
+//	[uint16_be(len+1)][username\0]
+//	[uint16_be(len+1)][password\0]
+//	[uint16_be(len+1)][peer_info\0]
+func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string, awsFormat bool) error {
 	var body []byte
 
 	// key_method byte
 	body = append(body, 0x02)
 
-	// TLSPRF client data: pre_master (48 bytes) + random1 (32 bytes) + random2 (32 bytes) = 112 bytes.
+	// TLSPRF client data: pre_master (48B) + random1 (32B) + random2 (32B) = 112 bytes.
 	rnd := make([]byte, 112)
 	if _, err := rand.Read(rnd); err != nil {
 		return fmt.Errorf("sendAuthPacket: rand: %w", err)
 	}
 	body = append(body, rnd...)
 
-	// helper: uint32_be length-prefixed NUL-terminated string (patched write_string)
+	if awsFormat {
+		// AWS: uint32_be length-prefixed NUL-terminated strings.
+		authStr := func(s string) []byte {
+			if len(s) == 0 {
+				return []byte{0x00, 0x00, 0x00, 0x00}
+			}
+			l := uint32(len(s) + 1)
+			b := []byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)}
+			return append(append(b, s...), 0x00)
+		}
+		body = append(body, authStr(buildTunnelOptions(proto))...)
+		body = append(body, authStr(username)...)
+		body = append(body, authStr(password)...)
+		body = append(body, authStr(peerInfo)...)
+
+		// Prepend total length as uint32_le.
+		totalLen := uint32(4 + len(body))
+		buf := []byte{byte(totalLen), byte(totalLen >> 8), byte(totalLen >> 16), byte(totalLen >> 24)}
+		_, err := w.Write(append(buf, body...))
+		return err
+	}
+
+	// Stock OpenVPN CE: uint16_be length-prefixed NUL-terminated strings.
 	authStr := func(s string) []byte {
 		if len(s) == 0 {
-			// Empty field: uint32_be(0), no NUL byte.
-			return []byte{0x00, 0x00, 0x00, 0x00}
+			// Empty: uint16_be(1) + NUL — stock OpenVPN always writes at least the NUL.
+			return []byte{0x00, 0x01, 0x00}
 		}
-		l := uint32(len(s) + 1) // +1 for NUL
-		b := []byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)}
-		b = append(b, s...)
-		b = append(b, 0x00)
-		return b
+		l := uint16(len(s) + 1)
+		b := []byte{byte(l >> 8), byte(l)}
+		return append(append(b, s...), 0x00)
 	}
+	body = append(body, authStr(buildTunnelOptions(proto))...)
+	body = append(body, authStr(username)...)
+	body = append(body, authStr(password)...)
+	body = append(body, authStr(peerInfo)...)
 
-	body = append(body, authStr(buildTunnelOptions(proto))...) // options
-	body = append(body, authStr(username)...)                  // username
-	body = append(body, authStr(password)...)                  // password
-	body = append(body, authStr(peerInfo)...)                  // peer_info
-
-	// Prepend the total length as uint32_le (key_method_2_write patch:
-	// memcpy(buf->data, &length, sizeof(length)) where length = total packet size).
-	totalLen := uint32(4 + len(body)) // 4-byte header + body
-	buf := []byte{
-		byte(totalLen),
-		byte(totalLen >> 8),
-		byte(totalLen >> 16),
-		byte(totalLen >> 24),
-	}
-	buf = append(buf, body...)
-	_, err := w.Write(buf)
+	// Stock header: literal 4-byte zero prefix.
+	buf := []byte{0x00, 0x00, 0x00, 0x00}
+	_, err := w.Write(append(buf, body...))
 	return err
 }
 
 // consumeServerAuthPacket reads and discards the server's key-method-2 auth
 // packet that arrives over TLS immediately after the handshake.
 //
-// AWS Client VPN uses the large-token patched wire format (ssl.c patch):
+// Both AWS Client VPN and stock OpenVPN CE servers send the stock format:
 //
-//	[total_len uint32_le]          first 4 bytes = total packet length (LE)
-//	[0x02]                         key_method byte
-//	[random1 32B][random2 32B]     64 bytes server TLSPRF (no pre_master)
-//	[uint32_be(len+1)][options\0]  patched: 4-byte length prefix
-//	[uint32_be(0)]                 empty username
-//	[uint32_be(0)]                 empty password
-//	[uint32_be(0)]                 empty peer_info
+//	[0x00 0x00 0x00 0x00]         literal zero prefix
+//	[0x02]                        key_method byte
+//	[random1 32B][random2 32B]    64 bytes server TLSPRF
+//	[uint16_be or uint32_be strings...]
 //
-// The total_len LE header is what distinguishes this from stock OpenVPN.
-// We read the header, validate byte 4 == 0x02 (key_method), then drain
-// exactly total_len bytes total.
-func consumeServerAuthPacket(r io.Reader) error {
-	// Read the 4-byte LE total-length header.
+// Some AWS deployments use the large-token patched format with a uint32_le
+// total-length header (value >= 85). We auto-detect by reading the 4-byte
+// header: if it decodes to a plausible LE length, drain that many bytes;
+// otherwise treat it as the stock zero-prefix and read the key_method byte.
+//
+// The awsFormat parameter is unused — the server format is always auto-detected.
+func consumeServerAuthPacket(r io.Reader, _ bool) error {
 	hdr := make([]byte, 4)
 	if _, err := io.ReadFull(r, hdr); err != nil {
 		return fmt.Errorf("consumeServerAuthPacket: read header: %w", err)
 	}
 	totalLen := int(hdr[0]) | int(hdr[1])<<8 | int(hdr[2])<<16 | int(hdr[3])<<24
 
-	// Sanity check: server auth packet is at least 85 bytes total and well under 1 MB.
-	if totalLen < 85 || totalLen > 1<<20 {
-		// Legacy stock OpenVPN server (no large-token patch): 5-byte prefix [0x00 0x00 0x00 0x00 0x02].
-		// hdr[0..3] are already read; read the 5th byte then drain the rest (~201 bytes).
-		oneByte := make([]byte, 1)
-		if _, err := io.ReadFull(r, oneByte); err != nil {
-			return fmt.Errorf("consumeServerAuthPacket: legacy read: %w", err)
+	if totalLen >= 85 && totalLen <= 1<<20 {
+		// AWS large-token patched format: hdr is uint32_le total length.
+		body := make([]byte, totalLen-4)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return fmt.Errorf("consumeServerAuthPacket: read body: %w", err)
 		}
-		drain := make([]byte, 8192)
-		r.Read(drain) //nolint:errcheck
+		if body[0] != 0x02 {
+			return fmt.Errorf("consumeServerAuthPacket: unexpected key_method byte 0x%02x", body[0])
+		}
 		return nil
 	}
 
-	// Read remaining bytes (totalLen - 4 already consumed by header read).
-	remaining := totalLen - 4
-	body := make([]byte, remaining)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return fmt.Errorf("consumeServerAuthPacket: read body: %w", err)
+	// Stock format: hdr is [0x00 0x00 0x00 0x00], next byte is 0x02 key_method.
+	km := make([]byte, 1)
+	if _, err := io.ReadFull(r, km); err != nil {
+		return fmt.Errorf("consumeServerAuthPacket: read key_method: %w", err)
 	}
-
-	// body[0] must be 0x02 (key_method).
-	if body[0] != 0x02 {
-		return fmt.Errorf("consumeServerAuthPacket: unexpected key_method byte 0x%02x", body[0])
+	if km[0] != 0x02 {
+		return fmt.Errorf("consumeServerAuthPacket: unexpected key_method byte 0x%02x", km[0])
 	}
+	drain := make([]byte, 8192)
+	r.Read(drain) //nolint:errcheck
 	return nil
 }
 
@@ -1980,11 +1998,11 @@ func (c *Client) doRekey(ctx context.Context) error {
 	// Reference: openvpn3-core ssl/proto.hpp KeyContext::generate_datachannel_keys()
 	// is called after the renegotiated TLS session reaches ACTIVE state, which
 	// requires the auth exchange to complete first.
-	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, "N/A", ""); err != nil {
+	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, "N/A", "", c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey send auth: %w", err)
 	}
-	if err := consumeServerAuthPacket(rekeyTLS); err != nil {
+	if err := consumeServerAuthPacket(rekeyTLS, c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey read server auth: %w", err)
 	}
