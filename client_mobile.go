@@ -94,6 +94,19 @@ func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 			}
 			return tun.OpenFd(fd)
 		}
+
+		c.EventFn = func(e Event) {
+			switch e.Type {
+			case EventLog:
+				cb.Log(e.Message)
+			case EventStateChanged:
+				if e.Message != "" {
+					cb.Log(fmt.Sprintf("vpn: state → %s: %s", e.State, e.Message))
+				} else {
+					cb.Log(fmt.Sprintf("vpn: state → %s", e.State))
+				}
+			}
+		}
 	}
 
 	return &MobileClient{
@@ -117,20 +130,22 @@ func (m *MobileClient) Connect() string {
 	return ""
 }
 
-// StartSAMLFlow dials the server and retrieves the SAML challenge (AWS SSO only).
+// StartSAMLFlow dials the server and retrieves the SAML challenge.
 //
 // Return values:
-//   - JSON object {"saml_url":"...","state_id":"..."}: SAML challenge received.
-//     Open saml_url in a browser, collect the SAMLResponse, and call CompleteSAMLFlow.
-//   - "" (empty): no SAML challenge — call CompleteSAMLFlow("") to finish.
-//   - Any other non-empty string: error message.
+//   - JSON object {"saml_url":"...","state_id":"...","remote_ip":"..."}: SAML challenge.
+//     Open saml_url in a browser, collect the SAMLResponse, call CompleteSAMLFlow.
+//   - JSON object {} (empty): no SAML challenge — call CompleteSAMLFlow("") to finish.
+//   - "error: <message>": connection failure.
 func (m *MobileClient) StartSAMLFlow() string {
 	challenge, err := m.inner.connectPhase1(m.ctx)
 	if err != nil {
-		return err.Error()
+		return "error: " + err.Error()
 	}
 	if challenge == nil {
-		return ""
+		// Non-SAML profile: Phase 1 completed without a challenge.
+		// Caller must call CompleteSAMLFlow("") to finish.
+		return "{}"
 	}
 	b, err := json.Marshal(map[string]string{
 		"saml_url":  challenge.URL,
@@ -138,7 +153,7 @@ func (m *MobileClient) StartSAMLFlow() string {
 		"remote_ip": m.inner.Phase1IP(),
 	})
 	if err != nil {
-		return fmt.Sprintf("vpn: marshal challenge: %v", err)
+		return fmt.Sprintf("error: marshal challenge: %v", err)
 	}
 	return string(b)
 }
@@ -177,7 +192,7 @@ func (m *MobileClient) WaitForDisconnect() string {
 }
 
 // Stats returns a JSON string with the current tunnel statistics.
-// Keys: "bytes_sent" (int), "bytes_recv" (int), "uptime_sec" (int).
+// Keys: "bytes_sent" (int), "bytes_recv" (int), "uptime_sec" (int), "local_ip" (string).
 // Returns an error description string if marshalling fails (should not happen).
 func (m *MobileClient) Stats() string {
 	s := m.inner.Stats()
@@ -185,6 +200,7 @@ func (m *MobileClient) Stats() string {
 		"bytes_sent": s.BytesSent,
 		"bytes_recv": s.BytesRecv,
 		"uptime_sec": int64(s.Uptime.Seconds()),
+		"local_ip":   m.inner.LocalIP(),
 	})
 	if err != nil {
 		return fmt.Sprintf("vpn: marshal stats: %v", err)

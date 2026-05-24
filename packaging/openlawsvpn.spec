@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.6
+Version:        1.0.7
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -195,6 +195,16 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sun May 24 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.7-1
+- fix(mobile): set awsFormat in connectPhase1 so Phase 2 uses correct wire format
+  when StartSAMLFlow/CompleteSAMLFlow are called directly (bypassing Connect).
+  Fixes AWS SAML flow silently hanging after token delivery.
+- fix(mobile): StartSAMLFlow returns "error: …" prefix on failure and "{}" (not "")
+  for non-SAML profiles, preventing JSONObject("") crash in Kotlin.
+- fix(mobile): wire EventFn to MobileCallbacks.Log so all state/error events reach Android.
+- fix(buildIfconfigJSON): emit "peer" key (not "gateway") for net30 topology
+  so VpnConnectionService.Builder.addRoute(peer, 32) is called correctly.
+
 * Sun May 24 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.6-1
 - feat(client): support standard OpenVPN CE wire format for cert/user-pass auth
   Enables connecting to stock OpenVPN CE servers (e.g. QA test server) without SAML.

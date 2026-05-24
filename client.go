@@ -332,6 +332,11 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 		return nil, fmt.Errorf("vpn: connectPhase1 called in state %v", c.state)
 	}
 	c.state = stateConnecting
+	// Detect auth flow here so connectPhase2 (called separately on mobile)
+	// uses the correct wire format even when Connect() is bypassed.
+	if c.prof.DetectFlow() == profile.FlowAWSSSO {
+		c.awsFormat = true
+	}
 	c.mu.Unlock()
 
 	host := c.prof.Remote
@@ -2189,7 +2194,12 @@ func buildIfconfigJSON(push *routing.PushOptions, dnsOpts *dns.Config, mtu int) 
 			m["mask"] = net.IP(push.Ifconfig.Mask).String()
 		}
 		if push.Ifconfig.Gateway != nil {
-			m["gateway"] = push.Ifconfig.Gateway.String()
+			if push.Topology == routing.TopologyNet30 {
+				// net30: Gateway is the P2P peer; Kotlin reads "peer" to add a /32 route.
+				m["peer"] = push.Ifconfig.Gateway.String()
+			} else {
+				m["gateway"] = push.Ifconfig.Gateway.String()
+			}
 		}
 	}
 	var routes []routeJSON
