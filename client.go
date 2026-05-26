@@ -1088,6 +1088,14 @@ func (c *Client) SetRelayPhase2(remoteIP, stateID string) {
 		StateID:  stateID,
 		RemoteIP: remoteIP,
 	}
+	// Mirror what connectPhase1 does: set awsFormat so ConnectPhase2 uses the
+	// correct wire format (uint32_be lengths + uint32_le total-length header).
+	// Without this, ConnectPhase2 sends stock OpenVPN CE framing to an AWS
+	// endpoint and gets AUTH_FAILED — regression introduced in v1.0.7 when
+	// awsFormat became a conditional flag.
+	if c.prof.DetectFlow() == profile.FlowAWSSSO {
+		c.awsFormat = true
+	}
 }
 
 // ConnectPhase2 completes the VPN connection using a SAML token delivered via

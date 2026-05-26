@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.7
+Version:        1.0.8
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -195,6 +195,13 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Tue May 26 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.8-1
+- fix(relay): set awsFormat in SetRelayPhase2 so ConnectPhase2 uses AWS wire
+  format (uint32_be lengths + uint32_le total-length header) when the CLI agent
+  completes Phase 2 on behalf of the mobile app. Without this, the agent sent
+  stock OpenVPN CE framing to AWS Client VPN and got AUTH_FAILED. Regression
+  introduced in v1.0.7 when awsFormat became a conditional flag.
+
 * Sun May 24 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.7-1
 - fix(mobile): set awsFormat in connectPhase1 so Phase 2 uses correct wire format
   when StartSAMLFlow/CompleteSAMLFlow are called directly (bypassing Connect).
