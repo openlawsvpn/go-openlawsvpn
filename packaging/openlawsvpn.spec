@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.8
+Version:        1.0.9
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -195,6 +195,11 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon Jun 01 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.9-1
+- feat(profile): add x-openlawsvpn-flow directive to force SAML/CRV1 flow
+  for non-AWS servers (e.g. demo mockserver). Allows custom hostnames to use
+  the full two-phase SAML flow without matching cvpn-endpoint-*.amazonaws.com.
+
 * Tue May 26 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.8-1
 - fix(relay): set awsFormat in SetRelayPhase2 so ConnectPhase2 uses AWS wire
   format (uint32_be lengths + uint32_le total-length header) when the CLI agent

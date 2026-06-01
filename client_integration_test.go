@@ -12,7 +12,6 @@ package vpn_test
 
 import (
 	"context"
-	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,8 +189,10 @@ func TestConnectCRV1Flow(t *testing.T) {
 	}
 	t.Logf("challenge: stateID=%q url=%q", challenge.StateID, challenge.URL)
 
-	fakeToken := base64.StdEncoding.EncodeToString([]byte("fake-saml-response"))
-	if err := client.ConnectPhase2Reuse(ctx, fakeToken); err != nil {
+	// Use the fixed demo token — the same value the static login page POSTs
+	// to the ACS server and that mockserver validates in Phase 2.
+	demoToken := "DEMO2026OPENLAWS"
+	if err := client.ConnectPhase2Reuse(ctx, demoToken); err != nil {
 		if !strings.Contains(err.Error(), "operation not permitted") &&
 			!strings.Contains(err.Error(), "CAP_NET_ADMIN") {
 			t.Fatalf("ConnectPhase2Reuse: %v", err)
@@ -220,7 +221,7 @@ func TestConnectCRV1Flow(t *testing.T) {
 	if !strings.HasPrefix(p2.Password, "CRV1::") {
 		t.Errorf("phase2 password should start with 'CRV1::', got %q", p2.PasswordPrefix)
 	}
-	if !strings.Contains(p2.Password, fakeToken) {
-		t.Errorf("phase2 password should contain the SAML token")
+	if !strings.Contains(p2.Password, demoToken) {
+		t.Errorf("phase2 password should contain the demo token")
 	}
 }

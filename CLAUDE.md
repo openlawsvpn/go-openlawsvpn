@@ -181,7 +181,9 @@ go-openlawsvpn/
   mock/mockserver/  — pure-Go mock OpenVPN3 server (no openvpn3-core dependency)
   testenv/          — integration test harness (starts mock server in-process)
   testdata/         — test .ovpn profile
-  cmd/ovpn3/        — Linux CLI with SAML flow and reconnect loop
+  cmd/cli/          — Linux CLI with SAML flow and reconnect loop
+  cmd/daemon/       — D-Bus system service (used by GTK GUI)
+  cmd/relay-server/ — relay server binary
 ```
 
 ## Development rules
@@ -209,3 +211,11 @@ To run integration tests against the local mock:
 ```bash
 go test -v -tags=integration -timeout 120s .
 ```
+
+To build and run the CLI (requires root for TUN):
+```bash
+go build -o /tmp/openlawsvpn-cli ./cmd/cli
+sudo /tmp/openlawsvpn-cli -config path/to/profile.ovpn
+```
+
+**NOTE:** The CLI uses `-config <path>` as a named flag. There is no positional argument and no `connect` subcommand.

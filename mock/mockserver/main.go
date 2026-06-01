@@ -13,6 +13,8 @@
 //	MOCK_UDP_PORT      — UDP listen port (default 1194)
 //	CERT_DIR           — directory containing ca.crt server.crt server.key
 //	                     when unset, self-signed certs are generated in memory
+//	IDP_URL            — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login.html)
+//	DEMO_TOKEN         — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
 package main
 
 import (
@@ -436,10 +438,10 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		logEvent("error", "read client auth: "+err.Error())
 		return
 	}
-	_ = raw
+	awsClient := len(raw) >= 4 && (int(raw[0])|int(raw[1])<<8|int(raw[2])<<16|int(raw[3])<<24) >= 85
 	logEvent("auth_packet_recv", authInfo)
 
-	serverAuthPkt := buildServerAuthPacket()
+	serverAuthPkt := buildServerAuthPacket(awsClient)
 	if _, err := tlsConn.Write(serverAuthPkt); err != nil {
 		logEvent("error", "write server auth: "+err.Error())
 		return
@@ -468,7 +470,11 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		}
 		// Phase 1 — send CRV1 challenge.
 		stateID := strconv.FormatInt(time.Now().UnixNano(), 16)
-		samlURL := "https://mock-saml.example.com/sso?state=" + stateID
+		idpBase := os.Getenv("IDP_URL")
+		if idpBase == "" {
+			idpBase = "https://openlawsvpn.com/demo/login.html"
+		}
+		samlURL := idpBase + "?state=" + stateID
 		challenge := "AUTH_FAILED,CRV1:R:" + stateID + "::" + samlURL + "\x00"
 		if _, err := tlsConn.Write([]byte(challenge)); err != nil {
 			logEvent("error", "write crv1 challenge: "+err.Error())
@@ -512,7 +518,17 @@ func handleCRV1Phase2(tlsConn *tls.Conn, authInfo string, remote string) {
 	}
 	stateID := rest[:sepIdx]
 	token := rest[sepIdx+2:]
-	logEvent("crv1_phase2_ok", fmt.Sprintf("state_id=%s token_len=%d", stateID, len(token)))
+
+	demoToken := os.Getenv("DEMO_TOKEN")
+	if demoToken == "" {
+		demoToken = "DEMO2026OPENLAWS"
+	}
+	if token != demoToken {
+		logEvent("crv1_phase2_rejected", fmt.Sprintf("state_id=%s bad_token_len=%d", stateID, len(token)))
+		tlsConn.Write([]byte("AUTH_FAILED\x00")) //nolint:errcheck
+		return
+	}
+	logEvent("crv1_phase2_ok", fmt.Sprintf("state_id=%s", stateID))
 
 	pushReply := buildPushReply()
 	if _, err := tlsConn.Write([]byte(pushReply)); err != nil {
@@ -532,16 +548,14 @@ const serverAuthOptions = "V4,dev-type tun,link-mtu 1521,tun-mtu 1500,proto UDPv
 
 // buildServerAuthPacket constructs the server side of the key-method-2 handshake.
 //
-// Uses the AWS large-token patched wire format (ssl.c patch):
+// When awsFormat is true, uses the AWS large-token patched wire format:
 //
-//	[total_len uint32_le]         first 4 bytes = total packet length (LE)
-//	[0x02]                        key_method byte
-//	[random1 32B][random2 32B]    64 bytes server TLSPRF (no pre_master)
-//	[uint32_be(len+1)][options\0] 4-byte length prefix
-//	[uint32_be(0)]                empty username
-//	[uint32_be(0)]                empty password
-//	[uint32_be(0)]                empty peer_info
-func buildServerAuthPacket() []byte {
+//	[total_len uint32_le][0x02][random 64B][uint32_be strings...]
+//
+// When awsFormat is false, uses stock OpenVPN CE format:
+//
+//	[0x00 0x00 0x00 0x00][0x02][random 64B][uint16_be strings...]
+func buildServerAuthPacket(awsFormat bool) []byte {
 	var body []byte
 	body = append(body, 0x02) // key_method
 
@@ -549,25 +563,30 @@ func buildServerAuthPacket() []byte {
 	rand.Read(rnd) //nolint:errcheck
 	body = append(body, rnd...)
 
-	body = append(body, authStr(serverAuthOptions)...)
-	body = append(body, authStr("")...)
-	body = append(body, authStr("")...)
-	body = append(body, authStr("")...)
-
-	totalLen := uint32(4 + len(body))
-	buf := []byte{
-		byte(totalLen),
-		byte(totalLen >> 8),
-		byte(totalLen >> 16),
-		byte(totalLen >> 24),
+	if awsFormat {
+		body = append(body, authStr(serverAuthOptions)...)
+		body = append(body, authStr("")...)
+		body = append(body, authStr("")...)
+		body = append(body, authStr("")...)
+		totalLen := uint32(4 + len(body))
+		buf := []byte{byte(totalLen), byte(totalLen >> 8), byte(totalLen >> 16), byte(totalLen >> 24)}
+		return append(buf, body...)
 	}
-	return append(buf, body...)
+
+	// Stock format: uint16_be length-prefixed strings, 4-byte zero header.
+	body = append(body, authStr16(serverAuthOptions)...)
+	body = append(body, authStr16("")...)
+	body = append(body, authStr16("")...)
+	body = append(body, authStr16("")...)
+	return append([]byte{0x00, 0x00, 0x00, 0x00}, body...)
 }
 
 // readClientAuthPacket reads and parses the client's key-method-2 auth packet.
 // Returns a JSON-encoded summary string for logging, plus the raw bytes.
 //
-// AWS large-token patched wire format (ssl.c patch):
+// Two wire formats are auto-detected from the 4-byte header:
+//
+// AWS large-token patched format (awsFormat, totalLen >= 85):
 //
 //	[total_len uint32_le]                        4-byte LE total length
 //	[0x02]                                       key_method byte
@@ -576,44 +595,75 @@ func buildServerAuthPacket() []byte {
 //	[uint32_be(len+1)][username\0]
 //	[uint32_be(len+1)][password\0]
 //	[uint32_be(len+1)][peer_info\0]
+//
+// Stock OpenVPN CE format (header == 0x00000000):
+//
+//	[0x00 0x00 0x00 0x00]                        literal zero prefix
+//	[0x02]                                       key_method byte
+//	[pre_master 48B][random1 32B][random2 32B]   = 112 bytes TLSPRF
+//	[uint16_be(len+1)][options\0]
+//	[uint16_be(len+1)][username\0]
+//	[uint16_be(len+1)][password\0]
+//	[uint16_be(len+1)][peer_info\0]
 func readClientAuthPacket(r io.Reader) (info string, raw []byte, err error) {
-	// Read the 4-byte LE total-length header.
+	// Read the 4-byte header — either LE total length (AWS) or 0x00000000 (stock).
 	hdr := make([]byte, 4)
 	if _, err := io.ReadFull(r, hdr); err != nil {
 		return "", nil, fmt.Errorf("read header: %w", err)
 	}
 	totalLen := int(hdr[0]) | int(hdr[1])<<8 | int(hdr[2])<<16 | int(hdr[3])<<24
 
-	if totalLen < 5 || totalLen > 1<<21 {
-		return "", nil, fmt.Errorf("auth packet total_len out of range: %d", totalLen)
+	if totalLen >= 85 && totalLen <= 1<<21 {
+		// AWS format: hdr is uint32_le total packet length.
+		body := make([]byte, totalLen-4)
+		if _, err := io.ReadFull(r, body); err != nil {
+			return "", nil, fmt.Errorf("read body (totalLen=%d): %w", totalLen, err)
+		}
+		raw = append(hdr, body...)
+
+		if len(body) < 1 || body[0] != 0x02 {
+			return buildAuthInfo("(bad_key_method)", "", "", "", totalLen), raw, nil
+		}
+		off := 1
+		const tlsPRFSize = 112
+		if off+tlsPRFSize > len(body) {
+			return buildAuthInfo("(short_after_key_method)", "", "", "", totalLen), raw, nil
+		}
+		off += tlsPRFSize
+		// uint32_be length-prefixed strings.
+		options, off2 := parseAuthStr(body, off)
+		username, off3 := parseAuthStr(body, off2)
+		password, off4 := parseAuthStr(body, off3)
+		peerInfo, _ := parseAuthStr(body, off4)
+		return buildAuthInfo(options, username, password, peerInfo, totalLen), raw, nil
 	}
 
-	body := make([]byte, totalLen-4)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return "", nil, fmt.Errorf("read body (totalLen=%d): %w", totalLen, err)
+	// Stock OpenVPN CE format: header is 0x00000000, next byte is key_method.
+	// Read the rest: key_method(1) + TLSPRF(112) + strings.
+	// We read up to 8 KiB which is more than enough for any stock auth packet.
+	rest := make([]byte, 8192)
+	n, err2 := r.Read(rest)
+	if err2 != nil && n == 0 {
+		return "", nil, fmt.Errorf("read stock body: %w", err2)
 	}
+	body := rest[:n]
 	raw = append(hdr, body...)
 
-	// body[0] must be 0x02 (key_method).
 	if len(body) < 1 || body[0] != 0x02 {
-		return buildAuthInfo("(bad_key_method)", "", "", "", totalLen), raw, nil
+		return buildAuthInfo("(bad_key_method_stock)", "", "", "", 4+n), raw, nil
 	}
-
-	off := 1 // skip key_method byte
-	// Skip 112 bytes TLSPRF (pre_master 48 + random1 32 + random2 32).
+	off := 1
 	const tlsPRFSize = 112
 	if off+tlsPRFSize > len(body) {
-		return buildAuthInfo("(short_after_key_method)", "", "", "", totalLen), raw, nil
+		return buildAuthInfo("(short_after_key_method_stock)", "", "", "", 4+n), raw, nil
 	}
 	off += tlsPRFSize
-
-	// Parse auth strings (uint32_be length prefix).
-	options, off2 := parseAuthStr(body, off)
-	username, off3 := parseAuthStr(body, off2)
-	password, off4 := parseAuthStr(body, off3)
-	peerInfo, _ := parseAuthStr(body, off4)
-
-	return buildAuthInfo(options, username, password, peerInfo, totalLen), raw, nil
+	// uint16_be length-prefixed strings.
+	options, off2 := parseAuthStr16(body, off)
+	username, off3 := parseAuthStr16(body, off2)
+	password, off4 := parseAuthStr16(body, off3)
+	peerInfo, _ := parseAuthStr16(body, off4)
+	return buildAuthInfo(options, username, password, peerInfo, 4+n), raw, nil
 }
 
 // buildAuthInfo formats the parsed auth packet fields as a JSON string for logEvent.
@@ -677,9 +727,26 @@ func parseAuthStr(buf []byte, off int) (string, int) {
 	if end > len(buf) {
 		end = len(buf)
 	}
-	s := string(buf[off:end])
-	// Strip trailing NUL.
-	s = strings.TrimRight(s, "\x00")
+	s := strings.TrimRight(string(buf[off:end]), "\x00")
+	return s, end
+}
+
+// parseAuthStr16 reads a uint16_be-length-prefixed NUL-terminated string.
+// Used for stock OpenVPN CE wire format.
+func parseAuthStr16(buf []byte, off int) (string, int) {
+	if off+2 > len(buf) {
+		return "", off
+	}
+	length := int(binary.BigEndian.Uint16(buf[off:]))
+	off += 2
+	if length == 0 {
+		return "", off
+	}
+	end := off + length
+	if end > len(buf) {
+		end = len(buf)
+	}
+	s := strings.TrimRight(string(buf[off:end]), "\x00")
 	return s, end
 }
 
@@ -692,6 +759,19 @@ func authStr(s string) []byte {
 	}
 	l := uint32(len(s) + 1)
 	b := []byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)}
+	b = append(b, s...)
+	b = append(b, 0x00)
+	return b
+}
+
+// authStr16 encodes s as a uint16_be-length-prefixed NUL-terminated string.
+// Empty string: uint16_be(1) + NUL — matches stock OpenVPN CE encoding.
+func authStr16(s string) []byte {
+	if s == "" {
+		return []byte{0x00, 0x01, 0x00}
+	}
+	l := uint16(len(s) + 1)
+	b := []byte{byte(l >> 8), byte(l)}
 	b = append(b, s...)
 	b = append(b, 0x00)
 	return b

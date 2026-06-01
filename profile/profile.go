@@ -70,6 +70,11 @@ type Profile struct {
 	// When non-empty, it overrides the TLS ServerName used for certificate verification.
 	// AWS Client VPN profiles typically set this to the actual certificate CN (e.g. "mtlab.ai").
 	VerifyX509Name string
+
+	// ForceSAMLFlow is set when the profile contains 'x-openlawsvpn-flow saml'.
+	// Forces FlowAWSSSO regardless of the remote hostname, allowing non-AWS servers
+	// (e.g. the demo mockserver) to use the CRV1/SAML two-phase flow.
+	ForceSAMLFlow bool
 }
 
 // AuthFlow describes which authentication mechanism the profile uses.
@@ -89,6 +94,9 @@ const (
 
 // DetectFlow inspects the profile and returns the appropriate AuthFlow.
 func (p *Profile) DetectFlow() AuthFlow {
+	if p.ForceSAMLFlow {
+		return FlowAWSSSO
+	}
 	if strings.HasPrefix(p.Remote, "cvpn-endpoint-") && strings.HasSuffix(p.Remote, ".amazonaws.com") {
 		return FlowAWSSSO
 	}
@@ -239,6 +247,10 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			p.MSSFix = n
 		case "remote-random-hostname":
 			p.RandomHostname = true
+		case "x-openlawsvpn-flow":
+			if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
+				p.ForceSAMLFlow = true
+			}
 		case "verify-x509-name":
 			if len(fields) >= 2 {
 				p.VerifyX509Name = fields[1]
