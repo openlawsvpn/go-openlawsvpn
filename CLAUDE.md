@@ -3,23 +3,40 @@
 ## What this repo is
 
 A pure Go implementation of the OpenVPN3 client protocol — the same protocol
-used by openvpn3-core (C++). The goal is to replace the C++/JNI/NDK dependency
-in `openlawsvpn-android` and `openlawsvpn` (Linux CLI) with a fully static Go
-library that `go build` / `gomobile bind` can produce without any C toolchain.
+used by openvpn3-core (C++). It is a clean-room Go implementation based on the
+OpenVPN protocol specification, with openvpn3-core source consulted only as a
+historical reference. `go build` / `gomobile bind` produce a fully static binary
+and an Android `.aar` with no C toolchain.
 
-This is a long-term foundational project. It is NOT a fork or wrapper of
-openvpn3-core — it is a clean-room Go implementation based on the OpenVPN
-protocol specification and openvpn3-core source as a reference.
+This repo **is** the engine. The old C++/openvpn3-core stack it once aimed to
+replace is now fully retired and archived (see "Status" below).
 
 ## Parent project context
 
 **openlawsvpn** is an open-source AWS Client VPN client with SAML/SSO support.
-- Linux CLI: https://github.com/openlawsvpn/openlawsvpn (C++, LGPL-2.1)
-- Android app: https://github.com/openlawsvpn/openlawsvpn-android (Kotlin+JNI)
+This repo is the current engine for all platforms:
+- Linux CLI + daemon + GTK4 GUI: this repo (`cmd/cli`, `cmd/daemon`, `gui-gtk/`)
+- Android client: https://github.com/openlawsvpn/openlawsvpn-android-go (consumes the `.aar`)
 - Website: https://openlawsvpn.com
 
-The current C++ stack: openvpn3-core (AGPL-3.0) + libopenlawsvpn (LGPL-2.1).
-This repo replaces the openvpn3-core dependency.
+Consumers pin the engine via a `go-openlawsvpn.version` file and consume the
+gomobile `.aar` produced by `aar.yml`.
+
+### Status (verify version with `git tag --sort=-v:refname | head -1`)
+
+The protocol is fully implemented and tested against a real AWS Client VPN
+endpoint. Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android
+(via the gomobile `.aar`). Current tag: **v1.0.9**. RPM built by COPR
+`vorona/openlawsvpn`.
+
+### Retired / archived — do NOT treat as current
+
+- `openlawsvpn/openlawsvpn` (archived) — old C++/openvpn3-core engine + Linux CLI.
+- `openlawsvpn/openlawsvpn-android` (archived) — old Kotlin+JNI/NDK app.
+
+There is no longer a `libopenlawsvpn` C library, no JNI, no NDK, and no
+openvpn3-core dependency anywhere in the shipping stack. The C API and C++
+reference sections below are kept only as protocol/porting background.
 
 ## Why Go
 
@@ -32,15 +49,12 @@ This repo replaces the openvpn3-core dependency.
 ## Goals (in priority order)
 
 1. **Correctness over completeness** — every packet exchange must be byte-exact
-   with what openvpn3-core expects. The mock server (Phase 1) is the oracle.
-2. **Replace libopenlawsvpn** — the public API must match the existing C API
-   surface (`clientNew`, `clientConnectPhase1`, `clientConnectPhase2`,
-   `clientDisconnect`, `clientFree`, callbacks for tun/protect/log).
-3. **Android via gomobile** — `gomobile bind` produces an `.aar` that drops into
-   `openlawsvpn-android` with no NDK changes.
-4. **Linux static binary** — `CGO_ENABLED=0 go build` produces a binary with
+   with what openvpn3-core expects. The mock server is the oracle.
+2. **Android via gomobile** — `gomobile bind` produces an `.aar` that drops into
+   `openlawsvpn-android-go` with no NDK changes.
+3. **Linux static binary** — `CGO_ENABLED=0 go build` produces a binary with
    zero runtime dependencies.
-5. **F-Droid compatibility** — no download-at-build-time, no prebuilt blobs.
+4. **F-Droid compatibility** — no download-at-build-time, no prebuilt blobs.
 
 ## Non-goals
 
@@ -72,9 +86,8 @@ Phase 2:
 Key detail: AWS hardcodes AssertionConsumerServiceURL = http://127.0.0.1:35001.
 This is true across all AWS regions and IdPs (Okta, Azure AD, Google Workspace).
 
-The current Kotlin implementation of the ACS server is in
-`openlawsvpn-android/app/src/main/java/com/openlawsvpn/android/SamlCallbackServer.kt`
-— use it as the reference for the Go `auth/saml` package.
+The ACS server now lives in this repo's `auth/saml` package (Go). The old Kotlin
+reference implementation in the archived `openlawsvpn-android` repo is obsolete.
 
 ## OpenVPN3 protocol reference
 
@@ -105,7 +118,11 @@ Key concepts an AI agent must know:
 - Critical options: `ifconfig`, `route`, `dhcp-option DNS`, `redirect-gateway`, `cipher`, `compress`
 - Example: `PUSH_REPLY,ifconfig 10.0.0.6 10.0.0.5,route 10.0.0.0 255.255.0.0,dhcp-option DNS 10.0.0.2`
 
-## Existing C++ reference files
+## C++ reference files (historical — protocol background only)
+
+> The shipping engine is pure Go and does not depend on these. They are listed
+> only as a map of where each protocol behaviour was originally learned from,
+> useful when porting a new protocol or debugging a wire-format edge case.
 
 All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 
@@ -119,7 +136,11 @@ All in openvpn3-core (https://github.com/OpenVPN/openvpn3):
 | `openvpn/prf/prfplus.hpp` | Key derivation PRF |
 | `tun/builder/base.hpp` | TUN callback interface (what gomobile must expose) |
 
-## Current libopenlawsvpn C API (what Go must replace)
+## Legacy libopenlawsvpn C API (historical — the Go API replaced this)
+
+> This C API no longer exists in any shipping component. It is kept to document
+> the semantics the Go `Client` mirrors. Today the surface is the Go `Client`
+> struct plus the gomobile `MobileClient`/`MobileCallbacks` in `client_mobile.go`.
 
 ```c
 // Allocate a new VPN client for the given .ovpn config file path.

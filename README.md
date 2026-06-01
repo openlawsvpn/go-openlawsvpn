@@ -7,8 +7,10 @@ Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 
 ## Status
 
-Working end-to-end on Linux (CLI + GTK4 GUI). Android gomobile API complete; `.aar` build
-pipeline in `.github/workflows/aar.yml`.
+Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android (via the
+gomobile `.aar`). Released — current tag **v1.0.9** (see `git tag`). The `.aar`
+build pipeline is in `.github/workflows/aar.yml`; RPMs are built by COPR
+`vorona/openlawsvpn`.
 
 ### Components
 
@@ -89,19 +91,27 @@ go test -v -tags=integration -timeout 120s .
 | Workflow | Trigger | What it does |
 |---|---|---|
 | **CI** (`ci.yml`) | push / PR to `main` | `go build`, `go test -race`, `go vet` |
-| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, notifies `openlawsvpn-android-go` to open a version-bump PR |
-| **Build RPM** (`rpm.yml`) | push tag `v*` | builds RPM via COPR, publishes to `vorona/openlawsvpn` |
+| **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
+| **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` + `daemon` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
+| **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
+
+RPM packages are **not** built in this repo's CI — they are built by COPR
+(`vorona/openlawsvpn`) from the spec in `packaging/openlawsvpn.spec`.
 
 ### Publishing a new release
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v1.0.10
+git push origin v1.0.10
 ```
 
-The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub Release, then fires a `repository_dispatch` to `openlawsvpn-android-go` — which opens a PR bumping `goOpenvpn3Version` automatically.
+The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
+Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
+PR bumping the pinned AAR version automatically.
 
-**Required secret** in this repo: `ANDROID_GO_PAT` — a GitHub PAT with `repo` scope on `openlawsvpn/openlawsvpn-android-go`.
+**Cross-repo auth:** writes use the `openlawsvpn-ci` GitHub App via
+`actions/create-github-app-token` — secrets `CI_APP_ID` / `CI_APP_PRIVATE_KEY`.
+There is no `ANDROID_GO_PAT` PAT.
 
 ## Known limitations
 
