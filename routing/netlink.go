@@ -1,3 +1,5 @@
+//go:build linux || android
+
 // Netlink route management for the routing package.
 //
 // ApplyRoutes adds the routes described by PushOptions to the kernel routing

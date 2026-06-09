@@ -1,4 +1,4 @@
-//go:build !android
+//go:build !android && !ios
 
 // Package tun provides a TUN network interface for Linux.
 //

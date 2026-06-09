@@ -1,0 +1,89 @@
+name: Build xcframework
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag for the release (e.g. v1.1.0)'
+        required: true
+
+jobs:
+  build-xcframework:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      sha256: ${{ steps.checksum.outputs.sha256 }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@$(go list -m -f '{{.Version}}' golang.org/x/mobile)
+          gomobile init
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build xcframework
+        run: |
+          gomobile bind -v \
+            -o go-openlawsvpn.xcframework \
+            -target ios,iossimulator,macos \
+            -ldflags "-X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
+            github.com/openlawsvpn/go-openlawsvpn
+
+      - name: Package and checksum
+        id: checksum
+        run: |
+          zip -r go-openlawsvpn.xcframework.zip go-openlawsvpn.xcframework
+          sha256sum go-openlawsvpn.xcframework.zip > go-openlawsvpn.xcframework.zip.sha256
+          echo "sha256=$(awk '{print $1}' go-openlawsvpn.xcframework.zip.sha256)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "go-openlawsvpn ${{ steps.version.outputs.tag }}"
+          body: |
+            Pure-Go OpenVPN3 client library for iOS and macOS.
+
+            ## Consuming this release
+
+            In `xcframeworks/`, add `go-openlawsvpn.xcframework`, then link it
+            in Xcode under Frameworks, Libraries, and Embedded Content.
+
+            Verify the download:
+            ```
+            sha256sum -c go-openlawsvpn.xcframework.zip.sha256
+            ```
+          files: |
+            go-openlawsvpn.xcframework.zip
+            go-openlawsvpn.xcframework.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  bump-ios:
+    needs: build-xcframework
+    if: github.event_name == 'push'
+    uses: openlawsvpn/openlawsvpn-ios/.github/workflows/bump-xcframework.yml@main
+    with:
+      version: ${{ needs.build-xcframework.outputs.tag }}
+      sha256: ${{ needs.build-xcframework.outputs.sha256 }}
+    secrets:
+      CI_APP_ID: ${{ secrets.CI_APP_ID }}
+      CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
