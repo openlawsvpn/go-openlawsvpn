@@ -47,6 +47,19 @@ jobs:
             -ldflags "-X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
             github.com/openlawsvpn/go-openlawsvpn
 
+      - name: Patch xcframework
+        run: |
+          # gomobile names inner frameworks with a hyphen (Go-Openlawsvpn.framework).
+          # Swift's -F search looks for Go_Openlawsvpn.framework (underscore). Symlink both.
+          ln -sf Go-Openlawsvpn.framework \
+            go-openlawsvpn.xcframework/ios-arm64_x86_64-simulator/Go_Openlawsvpn.framework
+          ln -sf Go-Openlawsvpn.framework \
+            go-openlawsvpn.xcframework/macos-arm64_x86_64/Go_Openlawsvpn.framework
+          sed -i '' 's/framework module "Go-Openlawsvpn"/framework module "Go_Openlawsvpn"/' \
+            go-openlawsvpn.xcframework/ios-arm64_x86_64-simulator/Go-Openlawsvpn.framework/Modules/module.modulemap
+          sed -i '' 's/framework module "Go-Openlawsvpn"/framework module "Go_Openlawsvpn"/' \
+            go-openlawsvpn.xcframework/macos-arm64_x86_64/Go-Openlawsvpn.framework/Modules/module.modulemap
+
       - name: Package and checksum
         id: checksum
         run: |
@@ -93,7 +106,8 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh workflow run bump-xcframework.yml \
-            --repo openlawsvpn/openlawsvpn-ios \
-            --field version=${{ needs.build-xcframework.outputs.tag }} \
-            --field sha256=${{ needs.build-xcframework.outputs.sha256 }}
+          VERSION="${{ needs.build-xcframework.outputs.tag }}"
+          SHA256="${{ needs.build-xcframework.outputs.sha256 }}"
+          printf '{"event_type":"bump-xcframework","client_payload":{"version":"%s","sha256":"%s"}}\n' \
+            "$VERSION" "$SHA256" |
+          gh api repos/openlawsvpn/openlawsvpn-ios/dispatches --method POST --input -
