@@ -22,7 +22,7 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay test lint clean daemon gui gui-release gui-deps rpm srpm builddep
+.PHONY: all aar aar-sha256 cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep
 
 all: aar
 
@@ -64,6 +64,13 @@ relay-server:
 RELAY_ADDR ?= :18080
 run-local-relay:
 	CGO_ENABLED=0 go run ./cmd/relay-server -addr $(RELAY_ADDR)
+
+## Verify builds cleanly for all four supported platforms (used by pre-commit).
+check-platforms:
+	GOOS=linux   GOARCH=amd64  go build ./...
+	GOOS=android GOARCH=arm64  go build ./...
+	GOOS=darwin  GOARCH=arm64  go build ./...
+	GOOS=darwin  GOARCH=arm64  go build -tags ios ./...
 
 ## Run unit tests
 test:
