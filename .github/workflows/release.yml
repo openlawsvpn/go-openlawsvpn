@@ -20,6 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write  # required for GitHub Artifact Attestation
 
     strategy:
       matrix:
@@ -54,6 +55,19 @@ jobs:
             ./cmd/cli
           sha256sum "$OUT" > "$OUT.sha256"
 
+      - name: GPG sign
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
+          OUT="openlawsvpn-cli-linux-${{ matrix.goarch }}"
+          gpg --batch --detach-sign --armor "$OUT"
+
+      - name: GitHub Artifact Attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: openlawsvpn-cli-linux-${{ matrix.goarch }}
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
@@ -61,5 +75,6 @@ jobs:
           files: |
             openlawsvpn-cli-linux-${{ matrix.goarch }}
             openlawsvpn-cli-linux-${{ matrix.goarch }}.sha256
+            openlawsvpn-cli-linux-${{ matrix.goarch }}.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
