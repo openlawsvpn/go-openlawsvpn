@@ -4,23 +4,24 @@ pkgname=(openlawsvpn-daemon openlawsvpn-cli openlawsvpn-gui)
 pkgver=1.1.1
 pkgrel=1
 pkgdesc="AWS Client VPN client with SAML/SSO support — pure Go stack"
-arch=(x86_64)
+arch=(x86_64 aarch64 powerpc64le)
 url="https://github.com/openlawsvpn/go-openlawsvpn"
 license=(LGPL-2.1-or-later)
 makedepends=(go rust gtk4 libadwaita openssl)
 install=openlawsvpn.install
-source=("$pkgbase-$pkgver.tar.gz::https://github.com/openlawsvpn/go-openlawsvpn/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+_srcdir="go-openlawsvpn-pkg-$pkgver-$pkgrel"
+source=("$pkgbase-$pkgver-$pkgrel.tar.gz::https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$pkgver-$pkgrel.tar.gz")
+sha256sums=('166f61950019578e81b013c18ce1f3f52439a58e7f78d1d326b630d1a02d6ea0')
 
 prepare() {
-    cd "go-openlawsvpn-$pkgver"
+    cd "$_srcdir"
     go mod download
     cd gui-gtk
     cargo fetch --locked || cargo fetch
 }
 
 build() {
-    cd "go-openlawsvpn-$pkgver"
+    cd "$_srcdir"
     CGO_ENABLED=0 go build -trimpath -o bin/openlawsvpn-daemon ./cmd/daemon
     CGO_ENABLED=0 go build -trimpath -o bin/openlawsvpn-cli ./cmd/cli
     cd gui-gtk
@@ -31,7 +32,7 @@ package_openlawsvpn-daemon() {
     pkgdesc="openlawsvpn VPN daemon (D-Bus system service)"
     depends=(dbus polkit libcap)
 
-    cd "go-openlawsvpn-$pkgver"
+    cd "$_srcdir"
 
     install -Dm755 bin/openlawsvpn-daemon \
         "$pkgdir/usr/lib/openlawsvpn/openlawsvpn-daemon"
@@ -60,7 +61,7 @@ package_openlawsvpn-cli() {
     pkgdesc="openlawsvpn CLI — headless VPN client with SAML/CRV1 support"
     depends=(iproute2)
 
-    cd "go-openlawsvpn-$pkgver"
+    cd "$_srcdir"
 
     install -Dm755 bin/openlawsvpn-cli "$pkgdir/usr/bin/openlawsvpn-cli"
 
@@ -75,7 +76,7 @@ package_openlawsvpn-gui() {
     license=(LGPL-2.1-or-later MIT Apache-2.0 BSD-2-Clause)
     depends=(openlawsvpn-daemon gtk4 libadwaita dbus openssl)
 
-    cd "go-openlawsvpn-$pkgver"
+    cd "$_srcdir"
 
     install -Dm755 gui-gtk/target/release/openlawsvpn-gui \
         "$pkgdir/usr/bin/openlawsvpn-gui"

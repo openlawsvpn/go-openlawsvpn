@@ -153,20 +153,27 @@ aur-build:
 aur-test-gui:
 	bash packaging/test-aur.sh --gui
 
-## Bump PKGBUILD to a new version: updates pkgver and recomputes sha256sums.
-## Usage: make aur-release VERSION=1.2.0
-VERSION ?=
+## Bump PKGBUILD to a new packaging release and regenerate .SRCINFO.
+## VERSION must be pkgver-pkgrel, e.g.: make aur-release VERSION=1.2.0-1
+## AUR_DIR: path to the aur-openlawsvpn git clone (default: ../aur-openlawsvpn)
+AUR_DIR ?= ../aur-openlawsvpn
 aur-release:
-	@if [ -z "$(VERSION)" ]; then \
-	    read -p "New pkgver: " v; \
-	else \
-	    v="$(VERSION)"; \
-	fi; \
-	sed -i "s/^pkgver=.*/pkgver=$$v/" packaging/PKGBUILD; \
-	echo "Downloading tarball to compute sha256..."; \
-	SHA=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/v$${v}.tar.gz" | sha256sum | cut -d' ' -f1); \
+	@test -n "$(VERSION)" || { echo "Usage: make aur-release VERSION=x.y.z-N"; exit 1; }
+	@VER="$(VERSION)"; \
+	PKGVER=$${VER%-*}; PKGREL=$${VER##*-}; \
+	echo "Releasing pkgver=$$PKGVER pkgrel=$$PKGREL"; \
+	sed -i "s/^pkgver=.*/pkgver=$$PKGVER/" packaging/PKGBUILD; \
+	sed -i "s/^pkgrel=.*/pkgrel=$$PKGREL/" packaging/PKGBUILD; \
+	echo "Downloading pkg/$$PKGVER-$$PKGREL tarball..."; \
+	SHA=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$${PKGVER}-$${PKGREL}.tar.gz" | sha256sum | cut -d' ' -f1); \
 	sed -i "s/^sha256sums=.*/sha256sums=('$$SHA')/" packaging/PKGBUILD; \
-	echo "Updated packaging/PKGBUILD: pkgver=$$v sha256=$$SHA"
+	echo "sha256=$$SHA"; \
+	cp packaging/PKGBUILD packaging/openlawsvpn.install "$(AUR_DIR)/"; \
+	podman run --rm --security-opt label=disable \
+	  -v "$$(realpath $(AUR_DIR)):/pkg" archlinux:base-devel \
+	  bash -c "useradd -m b; chown -R b /pkg; su b -c 'cd /pkg && makepkg --printsrcinfo'" \
+	  > "$(AUR_DIR)/.SRCINFO"; \
+	echo "Updated $(AUR_DIR): PKGBUILD .SRCINFO openlawsvpn.install"
 
 ## FC sandbox build
 PROJECTNAME=openlawsvpn
