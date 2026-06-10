@@ -1,0 +1,18 @@
+#!/bin/bash
+# Custom rpkg macros for go-openlawsvpn.
+# Referenced from rpkg.conf at the repo root.
+
+# go_vendor_pack — runs "go mod vendor", packs vendor/ into a gzipped tarball,
+# cleans up, and outputs the tarball filename.  Used as Source1 in the spec so
+# rpkg srpm bundles Go deps and mock can build completely offline.
+function go_vendor_pack {
+    local tarball_name="openlawsvpn-go-vendor.tar.gz"
+    echo go_vendor_pack: packing path $PWD >&2
+    export GOMODCACHE=/tmp/
+    go mod download
+    go mod vendor
+    tar czf "${OUTDIR}/${tarball_name}" vendor/
+    echo go_vendor_pack: wrote $OUTDIR/$tarball_name >&2
+    rm -rf vendor/
+    echo "$tarball_name"
+}

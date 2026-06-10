@@ -12,6 +12,7 @@ License:        LGPL-2.1-or-later
 
 URL:            https://github.com/openlawsvpn/go-openlawsvpn
 Source0:        {{{ git_repo_pack }}}
+Source1:        {{{ go_vendor_pack }}}
 
 # Tests are not shipped in the source tree — disable check bcond.
 %bcond check 0
@@ -67,6 +68,7 @@ Includes system-tray support via StatusNotifierItem.
 
 %prep
 %setup -T -b 0 -q -n go-openlawsvpn
+tar xzf %{SOURCE1}
 cd gui-gtk && %cargo_prep && cd -
 
 # ── Dynamic BuildRequires ─────────────────────────────────────────────────────
@@ -224,7 +226,7 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 - fix(routing): accept single-arg route directives (no mask) as /32 host routes
   Stock OpenVPN CE pushes "route <peer-ip>" in net30 topology; was fatal parse error.
 
-* Tue May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
+* Wed May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
 - fix(client): use net.JoinHostPort for IPv6 endpoint construction (PR#2)
   Replaces fmt.Sprintf("%s:%d") which produced invalid addresses for IPv6
   literals causing "too many colons in address" dial errors
