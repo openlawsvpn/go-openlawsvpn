@@ -1,7 +1,7 @@
 # Maintainer: Anatolii Vorona <vorona.tolik@gmail.com>
 pkgbase=openlawsvpn
 pkgname=(openlawsvpn-daemon openlawsvpn-cli openlawsvpn-gui)
-pkgver=1.0.9
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="AWS Client VPN client with SAML/SSO support — pure Go stack"
 arch=(x86_64)
