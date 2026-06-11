@@ -23,7 +23,7 @@ RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
 .PHONY: all aar aar-sha256 cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
-        build-bins test-integration-cli aur-build aur-test-gui aur-release
+        build-bins test-integration-cli aur-build aur-test-gui aur-release check-aur-release
 
 all: aar
 
@@ -174,6 +174,26 @@ aur-release:
 	  bash -c "useradd -m b; chown -R b /pkg; su b -c 'cd /pkg && makepkg --printsrcinfo'" \
 	  > "$(AUR_DIR)/.SRCINFO"; \
 	echo "Updated $(AUR_DIR): PKGBUILD .SRCINFO openlawsvpn.install"
+
+## Verify the current PKGBUILD is consistent: pkg/ tag exists on remote and sha256 matches.
+## Usage: make check-aur-release   (reads pkgver/pkgrel from packaging/PKGBUILD)
+check-aur-release:
+	@PKGVER=$$(grep '^pkgver=' packaging/PKGBUILD | cut -d= -f2); \
+	PKGREL=$$(grep '^pkgrel=' packaging/PKGBUILD | cut -d= -f2); \
+	EXPECTED=$$(grep '^sha256sums=' packaging/PKGBUILD | grep -o "'[^']*'" | tr -d "'"); \
+	echo "Checking pkg/$$PKGVER-$$PKGREL ..."; \
+	git ls-remote --exit-code origin "refs/tags/pkg/$$PKGVER-$$PKGREL" >/dev/null \
+	  || { echo "ERROR: tag pkg/$$PKGVER-$$PKGREL not found on origin"; exit 1; }; \
+	echo "Tag exists. Fetching tarball to verify sha256..."; \
+	ACTUAL=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$${PKGVER}-$${PKGREL}.tar.gz" | sha256sum | cut -d' ' -f1); \
+	if [ "$$ACTUAL" = "$$EXPECTED" ]; then \
+	  echo "OK: sha256 matches ($$ACTUAL)"; \
+	else \
+	  echo "ERROR: sha256 mismatch"; \
+	  echo "  PKGBUILD: $$EXPECTED"; \
+	  echo "  actual:   $$ACTUAL"; \
+	  exit 1; \
+	fi
 
 ## FC sandbox build
 PROJECTNAME=openlawsvpn
