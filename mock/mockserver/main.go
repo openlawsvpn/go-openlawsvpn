@@ -96,7 +96,11 @@ func main() {
 		udpConn = nil
 	}
 
-	logEvent("ready", fmt.Sprintf("tcp=0.0.0.0:%s udp=0.0.0.0:%s", tcpPort, udpPort))
+	udpAddr := "none"
+	if udpConn != nil {
+		udpAddr = udpConn.LocalAddr().String()
+	}
+	logEvent("ready", fmt.Sprintf("tcp=%s udp=%s", tcpLn.Addr().String(), udpAddr))
 
 	// Start UDP acceptor if available.
 	if udpConn != nil {

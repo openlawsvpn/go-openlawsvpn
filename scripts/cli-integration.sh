@@ -24,6 +24,8 @@ MOCK_CA=$(mktemp /tmp/mock-server-ca.XXXXXX.pem)
 CLI_LOG=$(mktemp /tmp/openlawsvpn-cli.XXXXXX.log)
 CLI_PID_FILE=$(mktemp /tmp/openlawsvpn-cli.XXXXXX.pid)
 TEST_OVPN=$(mktemp /tmp/test.XXXXXX.ovpn)
+# Allow root (via sudo) to write these files — mktemp defaults to 0600.
+chmod 0666 "$CLI_LOG" "$CLI_PID_FILE"
 MOCK_PID=
 
 cleanup() {
