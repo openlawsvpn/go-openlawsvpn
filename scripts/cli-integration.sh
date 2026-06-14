@@ -83,9 +83,9 @@ if ! grep -q '"event":"ready"' "$MOCK_LOG"; then
     exit 1
 fi
 
-# Extract the TCP port from the ready event detail: "tcp=0.0.0.0:PORT"
-PORT=$(grep -o '"event":"ready".*"detail":"tcp=0\.0\.0\.0:[0-9]*' "$MOCK_LOG" \
-      | grep -o '[0-9]*$')
+# Extract the TCP port from the ready event detail: "tcp=ADDR:PORT" (IPv4 or IPv6)
+PORT=$(grep '"event":"ready"' "$MOCK_LOG" \
+      | grep -o '"tcp=[^[:space:]"]*' | grep -o ':[0-9]*$' | tr -d ':')
 if [[ -z "$PORT" ]]; then
     echo "ERROR: could not parse TCP port from mock server ready event"
     cat "$MOCK_LOG"
