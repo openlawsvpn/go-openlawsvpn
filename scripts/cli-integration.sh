@@ -19,13 +19,15 @@ CLI_BIN=${CLI_BIN:-"$REPO_ROOT/bin/openlawsvpn-cli"}
 MOCK_BIN=${MOCK_BIN:-"$REPO_ROOT/bin/mock-server"}
 SUDO=${SUDO:-sudo}
 
-MOCK_LOG=$(mktemp /tmp/mock-server.XXXXXX.log)
-MOCK_CA=$(mktemp /tmp/mock-server-ca.XXXXXX.pem)
-CLI_LOG=$(mktemp /tmp/openlawsvpn-cli.XXXXXX.log)
-CLI_PID_FILE=$(mktemp /tmp/openlawsvpn-cli.XXXXXX.pid)
-TEST_OVPN=$(mktemp /tmp/test.XXXXXX.ovpn)
-# Allow root (via sudo) to write these files — mktemp defaults to 0600.
-chmod 0666 "$CLI_LOG" "$CLI_PID_FILE"
+# Use the repo work directory, not /tmp: sudo on ubuntu-24.04 gets a private
+# /tmp via pam_namespace, so files created by the runner user in /tmp are
+# invisible to the root process and O_CREATE fails with EACCES.
+mkdir -p "$REPO_ROOT/tmp"
+MOCK_LOG=$(mktemp "$REPO_ROOT/tmp/mock-server.XXXXXX.log")
+MOCK_CA=$(mktemp "$REPO_ROOT/tmp/mock-server-ca.XXXXXX.pem")
+CLI_LOG=$(mktemp "$REPO_ROOT/tmp/openlawsvpn-cli.XXXXXX.log")
+CLI_PID_FILE=$(mktemp "$REPO_ROOT/tmp/openlawsvpn-cli.XXXXXX.pid")
+TEST_OVPN=$(mktemp "$REPO_ROOT/tmp/test.XXXXXX.ovpn")
 MOCK_PID=
 
 cleanup() {

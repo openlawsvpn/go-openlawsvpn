@@ -47,3 +47,4 @@ gui-gtk/.cargo/
 
 # mock FC build results
 /rpm-results/
+/tmp/

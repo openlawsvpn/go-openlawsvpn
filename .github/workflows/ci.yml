@@ -60,5 +60,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cli-integration-logs
-          path: /tmp/openlawsvpn-cli.*.log
+          path: tmp/openlawsvpn-cli.*.log
           if-no-files-found: ignore
