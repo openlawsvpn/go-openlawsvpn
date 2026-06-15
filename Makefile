@@ -22,7 +22,7 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
+.PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
         build-bins test-integration-cli aur-build aur-test-gui aur-release check-aur-release
 
 all: aar
@@ -54,6 +54,13 @@ aar-sha256: go-openlawsvpn.aar
 ## Build the Linux CLI binary (CGO_ENABLED=0 → fully static)
 cli:
 	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
+
+## Build macOS CLI binaries (arm64 + amd64; requires sudo to run — utun needs root).
+build-macos-cli:
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+		-o openlawsvpn-cli-macos-arm64 ./cmd/cli
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+		-o openlawsvpn-cli-macos-amd64 ./cmd/cli
 
 ## Build the local relay-server test binary
 relay-server:

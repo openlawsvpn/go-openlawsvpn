@@ -31,7 +31,10 @@ jobs:
         run: go vet ./...
 
   cli-integration:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout code
@@ -59,6 +62,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: cli-integration-logs
+          name: cli-integration-logs-${{ matrix.os }}
           path: tmp/openlawsvpn-cli.*.log
           if-no-files-found: ignore

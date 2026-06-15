@@ -1,9 +1,9 @@
 name: Release
 
 # Fires on every v* tag in parallel with aar.yml.
-# Builds static Linux binaries (cli + daemon) for amd64 / arm64 / ppc64le
-# and attaches them — plus sha256 checksums — to the GitHub Release that
-# aar.yml creates for the same tag.
+# Builds static CLI binaries for Linux (amd64/arm64/ppc64le) and macOS
+# (arm64/amd64) and attaches them — plus sha256 checksums — to the GitHub
+# Release that aar.yml creates for the same tag.
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
 
 jobs:
   build-linux:
-    name: Build cli (${{ matrix.goarch }})
+    name: Build cli (linux-${{ matrix.goarch }})
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -77,5 +77,70 @@ jobs:
             openlawsvpn-cli-linux-${{ matrix.goarch }}
             openlawsvpn-cli-linux-${{ matrix.goarch }}.sha256
             openlawsvpn-cli-linux-${{ matrix.goarch }}.asc
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    name: Build cli (macos-${{ matrix.goarch }})
+    runs-on: macos-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    strategy:
+      matrix:
+        goarch: [arm64, amd64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUT="openlawsvpn-cli-macos-${{ matrix.goarch }}"
+          go build \
+            -ldflags "-s -w -X github.com/openlawsvpn/go-openlawsvpn.Version=${{ steps.version.outputs.tag }}" \
+            -o "$OUT" \
+            ./cmd/cli
+          shasum -a 256 "$OUT" > "$OUT.sha256"
+
+      - name: GPG sign
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | base64 --decode | gpg --batch --import
+          OUT="openlawsvpn-cli-macos-${{ matrix.goarch }}"
+          gpg --batch --detach-sign --armor "$OUT"
+
+      - name: GitHub Artifact Attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: openlawsvpn-cli-macos-${{ matrix.goarch }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            openlawsvpn-cli-macos-${{ matrix.goarch }}
+            openlawsvpn-cli-macos-${{ matrix.goarch }}.sha256
+            openlawsvpn-cli-macos-${{ matrix.goarch }}.asc
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
