@@ -1684,7 +1684,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 		default:
 		}
 		c.tunDev.File().SetReadDeadline(time.Now().Add(500 * time.Millisecond)) //nolint:errcheck
-		n, err := c.tunDev.File().Read(buf)
+		n, err := c.tunDev.Read(buf)
 		if err != nil {
 			if isTimeout(err) {
 				continue
@@ -1762,7 +1762,7 @@ func (c *Client) wireToTun(ctx context.Context) {
 			}
 			mssfix.Clamp(plain, c.mssFix)
 			c.bytesRecv.Add(uint64(len(plain)))
-			c.tunDev.File().Write(plain) //nolint:errcheck
+			c.tunDev.Write(plain) //nolint:errcheck
 		}
 	}
 }

@@ -26,7 +26,7 @@ gomobile `.aar` produced by `aar.yml`.
 
 The protocol is fully implemented and tested against a real AWS Client VPN
 endpoint. Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android
-(via the gomobile `.aar`). Current tag: **v1.1.3**. RPM built by COPR `vorona/openlawsvpn` (Fedora 43/44/rawhide,
+(via the gomobile `.aar`). Current tag: **v1.1.4**. RPM built by COPR `vorona/openlawsvpn` (Fedora 43/44/rawhide,
 x86_64/aarch64/ppc64le). AUR package: `openlawsvpn` (x86_64/aarch64/powerpc64le);
 AUR releases use `pkg/x.y.z-N` tags (separate from `v*` library tags).
 

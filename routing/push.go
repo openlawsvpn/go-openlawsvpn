@@ -246,11 +246,15 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("routing: route-gateway: expected argument")
 			}
-			gw := net.ParseIP(parts[1])
-			if gw == nil {
-				return nil, fmt.Errorf("routing: route-gateway: invalid IP %q", parts[1])
+			// "vpn_gateway" is an OpenVPN symbolic value meaning "use the
+			// ifconfig gateway". We resolve it after parsing all directives.
+			if strings.ToLower(parts[1]) != "vpn_gateway" {
+				gw := net.ParseIP(parts[1])
+				if gw == nil {
+					return nil, fmt.Errorf("routing: route-gateway: invalid IP %q", parts[1])
+				}
+				routeGateway = gw.To4()
 			}
-			routeGateway = gw.To4()
 
 		case "ifconfig":
 			if len(parts) < 3 {
