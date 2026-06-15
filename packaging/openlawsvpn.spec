@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.1.1
+Version:        1.1.3
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,11 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon Jun 15 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.3-1
+- feat(macos): native utun CLI path for macOS (Path A)
+- ci: add macOS CLI builds (amd64/arm64) to release workflow
+- fix(ci): preserve symlinks in xcframework zip (-y flag)
+
 * Thu Jun 11 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.1-1
 - feat(ios): add iOS xcframework build and CI workflow
 - ci: GPG-sign release binaries; add GitHub Artifact Attestation
