@@ -216,6 +216,10 @@ func ifconfigAddr(sock int, ifName string, ioctlNum uintptr, ip net.IP) error {
 	}
 	var req ifreqSockAddr
 	copy(req.name[:], ifName)
+	// BSD/macOS sockaddr structs require sa_len to be set correctly.
+	// Without it the kernel accepts the ioctl (errno=0) but silently ignores
+	// the address, leaving the interface peer/mask at its default (0.0.0.0).
+	req.addr.Len = unix.SizeofSockaddrInet4
 	req.addr.Family = unix.AF_INET
 	copy(req.addr.Addr[:], ip4)
 	_, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(sock), ioctlNum, uintptr(unsafe.Pointer(&req)))

@@ -2,10 +2,15 @@
 
 // macOS DNS configuration for the CLI (Path A — native utun).
 //
-// Two backends, tried in order:
-//  1. networksetup -setdnsservers <service> <servers…>  — scopes DNS to the
-//     active network service; survives sleep/wake without polluting global state.
-//  2. /etc/resolv.conf overwrite (same fallback as Linux).
+// DNS is injected into SCDynamicStore via `scutil --set` scoped to the
+// VPN's own service key (State:/Network/Service/<ifName>/DNS). This is
+// the same mechanism used by the OpenVPN3 macOS client and WireGuard-macOS:
+// mDNSResponder picks up the entry immediately without polluting the Wi-Fi
+// or Ethernet service, and the entry disappears automatically when the
+// interface goes down.
+//
+// Fallback: /etc/resolv.conf overwrite (rarely needed; scutil works on all
+// modern macOS versions with SIP disabled or running as root).
 //
 // On Path B (GUI / NEPacketTunnelProvider) the OS applies DNS via
 // setTunnelNetworkSettings; these functions are never called.
@@ -17,20 +22,15 @@ import (
 	"strings"
 )
 
-// Apply applies cfg using the best available backend for macOS:
-//  1. networksetup -setdnsservers on the primary IPv4 service (Wi-Fi or Ethernet).
-//  2. /etc/resolv.conf overwrite as a fallback.
-//
-// Returns the Backend used so Revert can call the matching cleanup.
+// Apply injects VPN DNS via SCDynamicStore (scutil) scoped to ifName.
+// Falls back to /etc/resolv.conf if scutil fails.
 func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return BackendNone, nil
 	}
 
-	if svc, err := primaryService(); err == nil {
-		if err := applyNetworkSetup(svc, cfg); err == nil {
-			return BackendResolved, nil
-		}
+	if err := applyScutil(cfg, ifName); err == nil {
+		return BackendResolved, nil
 	}
 
 	// Fallback: overwrite /etc/resolv.conf.
@@ -46,11 +46,7 @@ func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
 func Revert(backend Backend, ifName, backupPath string) error {
 	switch backend {
 	case BackendResolved:
-		svc, err := primaryService()
-		if err != nil {
-			return err
-		}
-		return revertNetworkSetup(svc)
+		return revertScutil(ifName)
 	case BackendResolvConf:
 		return RestoreResolvConf(backupPath)
 	default:
@@ -58,49 +54,53 @@ func Revert(backend Backend, ifName, backupPath string) error {
 	}
 }
 
-// applyNetworkSetup calls: networksetup -setdnsservers <service> <ip> [<ip>…]
-func applyNetworkSetup(service string, cfg *Config) error {
-	args := []string{"-setdnsservers", service}
+// scutil script that injects a DNS entry into SCDynamicStore for the given
+// interface. mDNSResponder picks this up immediately; the entry is scoped to
+// the VPN service key and does not affect Wi-Fi or Ethernet.
+//
+// Equivalent to what the OpenVPN3 macOS client writes via the
+// openssl_app_proxy helper's dns_setup() call (openvpn3/client/ovpncli.cpp).
+func applyScutil(cfg *Config, ifName string) error {
+	var script strings.Builder
+	script.WriteString("d.init\n")
+	script.WriteString("d.add ServerAddresses *")
 	for _, srv := range cfg.Servers {
-		args = append(args, srv.String())
+		script.WriteString(" ")
+		script.WriteString(srv.String())
 	}
-	out, err := exec.Command("/usr/sbin/networksetup", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("networksetup -setdnsservers: %w — %s", err, string(out))
-	}
-	return nil
-}
-
-// revertNetworkSetup clears custom DNS: networksetup -setdnsservers <service> empty
-func revertNetworkSetup(service string) error {
-	out, err := exec.Command("/usr/sbin/networksetup", "-setdnsservers", service, "empty").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("networksetup -setdnsservers empty: %w — %s", err, string(out))
-	}
-	return nil
-}
-
-// primaryService returns the name of the primary IPv4 network service
-// (e.g. "Wi-Fi" or "Ethernet") by parsing: networksetup -listnetworkserviceorder
-func primaryService() (string, error) {
-	out, err := exec.Command("/usr/sbin/networksetup", "-listnetworkserviceorder").Output()
-	if err != nil {
-		return "", fmt.Errorf("networksetup -listnetworkserviceorder: %w", err)
-	}
-	// Output looks like:
-	//   (1) Wi-Fi
-	//   (Hardware Port: Wi-Fi, Device: en0)
-	//   (2) Ethernet
-	//   ...
-	// Pick the first non-disabled service name.
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) > 3 && line[0] == '(' && line[1] >= '1' && line[1] <= '9' {
-			// Strip leading "(N) "
-			if idx := strings.Index(line, ") "); idx >= 0 {
-				return strings.TrimSpace(line[idx+2:]), nil
-			}
+	script.WriteString("\n")
+	if len(cfg.SearchDomains) > 0 {
+		script.WriteString("d.add SearchDomains *")
+		for _, dom := range cfg.SearchDomains {
+			script.WriteString(" ")
+			script.WriteString(dom)
 		}
+		script.WriteString("\n")
 	}
-	return "", fmt.Errorf("could not determine primary network service")
+	// SupplementalMatchDomains with empty string makes this a split-DNS
+	// entry; mDNSResponder will use this resolver only for VPN-pushed domains
+	// (or for all domains if no match domains are specified and the tunnel
+	// is the default route).
+	script.WriteString("d.add SupplementalMatchDomains *\n")
+	script.WriteString(fmt.Sprintf("set State:/Network/Service/%s/DNS\n", ifName))
+
+	cmd := exec.Command("/usr/sbin/scutil")
+	cmd.Stdin = strings.NewReader(script.String())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("scutil DNS inject: %w — %s", err, string(out))
+	}
+	return nil
+}
+
+// revertScutil removes the SCDynamicStore DNS entry for ifName.
+func revertScutil(ifName string) error {
+	script := fmt.Sprintf("remove State:/Network/Service/%s/DNS\n", ifName)
+	cmd := exec.Command("/usr/sbin/scutil")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("scutil DNS remove: %w — %s", err, string(out))
+	}
+	return nil
 }
