@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.1.3
+Version:        1.1.4
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,13 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Tue Jun 16 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.4-1
+- fix(macos): strip/prepend 4-byte utun AF header in Read/Write; add platform Read/Write methods to tun.Device
+- fix(macos): set sa_len in ifconfigAddr so kernel doesn't silently drop peer address
+- fix(macos): add gateway /32 host route unconditionally (not only for net30)
+- fix(macos): parse route-gateway vpn_gateway symbolic value without error
+- fix(macos): scope DNS via scutil SCDynamicStore instead of networksetup
+
 * Mon Jun 15 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.3-1
 - feat(macos): native utun CLI path for macOS (Path A)
 - ci: add macOS CLI builds (amd64/arm64) to release workflow
