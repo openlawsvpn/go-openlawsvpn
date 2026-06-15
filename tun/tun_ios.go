@@ -45,6 +45,12 @@ func (d *Device) File() *os.File { return d.file }
 // Close closes the TUN device file descriptor.
 func (d *Device) Close() error { return d.file.Close() }
 
+// Read reads one IP packet from the TUN device.
+func (d *Device) Read(buf []byte) (int, error) { return d.file.Read(buf) }
+
+// Write writes one IP packet to the TUN device.
+func (d *Device) Write(pkt []byte) (int, error) { return d.file.Write(pkt) }
+
 // Configure is a no-op on iOS: NEPacketTunnelNetworkSettings already configured
 // the interface before handing us the fd.
 func (d *Device) Configure(_ Config) error { return nil }

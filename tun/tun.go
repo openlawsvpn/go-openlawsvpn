@@ -174,6 +174,13 @@ func (d *Device) File() *os.File { return d.file }
 // The kernel automatically removes the interface when the last fd is closed.
 func (d *Device) Close() error { return d.file.Close() }
 
+// Read reads one IP packet from the TUN device.
+// Linux TUN with IFF_NO_PI has no packet-info header; packets are raw IP.
+func (d *Device) Read(buf []byte) (int, error) { return d.file.Read(buf) }
+
+// Write writes one IP packet to the TUN device.
+func (d *Device) Write(pkt []byte) (int, error) { return d.file.Write(pkt) }
+
 // Configure sets the local IP, peer IP, MTU, and brings the interface up.
 // It must be called after Open and before writing packets.
 func (d *Device) Configure(cfg Config) error {
