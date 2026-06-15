@@ -1,21 +1,13 @@
 // Package dns handles DNS configuration pushed by an OpenVPN server.
 //
-// When the server includes "dhcp-option DNS <ip>" directives in its
-// PUSH_REPLY, the client must configure the system resolver so that DNS
-// queries are sent to those servers while the tunnel is up.
+// Backends:
+//   - Linux: ApplyResolved (systemd-resolved via D-Bus) or /etc/resolv.conf.
+//     See dns_linux.go.
+//   - macOS (CLI): networksetup(8) or /etc/resolv.conf.
+//     See dns_darwin.go.
 //
-// Two backends are supported:
-//
-//   - ResolvConf: writes a resolv.conf(5)-formatted file (default /etc/resolv.conf).
-//     This is the lowest-common-denominator approach and works on any Linux
-//     system regardless of whether systemd-resolved is running.
-//
-//   - Resolved: notifies systemd-resolved via its D-Bus interface.
-//     Preferred on modern systemd-based systems because it scopes the DNS
-//     servers to the VPN interface rather than globally overwriting the
-//     system resolver.  Falls back to ResolvConf if the D-Bus call fails.
-//
-// Both backends are pure Go.
+// On the GUI path (NEPacketTunnelProvider) the OS applies DNS via
+// setTunnelNetworkSettings; Apply/Revert are never called.
 //
 // Reference: openvpn3-core client/dns_option.hpp, systemd resolved.conf(5)
 package dns
@@ -26,8 +18,6 @@ import (
 	"net"
 	"os"
 	"strings"
-
-	"github.com/godbus/dbus/v5"
 )
 
 // Config holds the DNS servers and search domains pushed by the server.
@@ -44,11 +34,6 @@ type Config struct {
 // The message may contain any number of "dhcp-option DNS <ip>" and
 // "dhcp-option DOMAIN <domain>" directives.  All other directives are
 // silently ignored.
-//
-// Example input:
-//
-//	PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5,dhcp-option DNS 10.8.0.1,
-//	  dhcp-option DNS 8.8.8.8,dhcp-option DOMAIN corp.example.com
 func ParsePushReply(msg string) (*Config, error) {
 	msg = strings.TrimPrefix(msg, "PUSH_REPLY,")
 	msg = strings.TrimRight(msg, "\x00")
@@ -86,11 +71,7 @@ func ParsePushReply(msg string) (*Config, error) {
 // Tests may override this to a temporary file.
 var ResolvConfPath = "/etc/resolv.conf"
 
-// ApplyResolvConf writes the DNS configuration to ResolvConfPath
-// (normally /etc/resolv.conf), replacing any previous content.
-//
-// The generated file is prefixed with a comment marking it as managed by
-// go-openlawsvpn so that it can be identified and restored on disconnect.
+// ApplyResolvConf writes the DNS configuration to ResolvConfPath.
 func ApplyResolvConf(cfg *Config) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil
@@ -111,9 +92,7 @@ func ApplyResolvConf(cfg *Config) error {
 	return nil
 }
 
-// RestoreResolvConf restores /etc/resolv.conf to the content it had before
-// ApplyResolvConf was called.  The backup path is the one returned by
-// BackupResolvConf.
+// RestoreResolvConf restores /etc/resolv.conf from the backup at backupPath.
 func RestoreResolvConf(backupPath string) error {
 	if backupPath == "" {
 		return nil
@@ -128,110 +107,14 @@ func RestoreResolvConf(backupPath string) error {
 	return os.Remove(backupPath)
 }
 
-// BackupResolvConf saves the current /etc/resolv.conf to backupPath so it
-// can be restored later by RestoreResolvConf.
+// BackupResolvConf saves the current /etc/resolv.conf to backupPath.
 func BackupResolvConf(backupPath string) error {
 	data, err := os.ReadFile(ResolvConfPath)
 	if err != nil {
-		// If /etc/resolv.conf does not exist, write an empty backup.
 		data = []byte{}
 	}
 	if err := os.WriteFile(backupPath, data, 0600); err != nil {
 		return fmt.Errorf("dns: backup %s → %s: %w", ResolvConfPath, backupPath, err)
-	}
-	return nil
-}
-
-// resolvedObject is the D-Bus object path for the systemd-resolved Manager.
-const resolvedDest = "org.freedesktop.resolve1"
-const resolvedPath = dbus.ObjectPath("/org/freedesktop/resolve1")
-const resolvedIface = "org.freedesktop.resolve1.Manager"
-
-// ifIndex returns the OS interface index for ifName.
-func ifIndex(ifName string) (int32, error) {
-	iface, err := net.InterfaceByName(ifName)
-	if err != nil {
-		return 0, fmt.Errorf("dns: interface %q: %w", ifName, err)
-	}
-	return int32(iface.Index), nil
-}
-
-// ApplyResolved configures DNS via systemd-resolved over D-Bus (no polkit).
-//
-// It calls org.freedesktop.resolve1.Manager.SetLinkDNS and SetLinkDomains,
-// scoping the servers to the TUN interface ifName.  This is equivalent to
-// what resolvectl(1) does internally, but bypasses the polkit check that
-// blocks non-interactive system service users.
-func ApplyResolved(cfg *Config, ifName string) error {
-	if cfg == nil || len(cfg.Servers) == 0 {
-		return nil
-	}
-
-	idx, err := ifIndex(ifName)
-	if err != nil {
-		return err
-	}
-
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		return fmt.Errorf("dns: system bus: %w", err)
-	}
-	defer conn.Close()
-
-	obj := conn.Object(resolvedDest, resolvedPath)
-
-	// SetLinkDNS(ifindex int32, addresses []struct{family int32, addr []byte})
-	type addrEntry struct {
-		Family  int32
-		Address []byte
-	}
-	var addrs []addrEntry
-	for _, srv := range cfg.Servers {
-		ip4 := srv.To4()
-		if ip4 != nil {
-			addrs = append(addrs, addrEntry{Family: 2, Address: []byte(ip4)}) // AF_INET
-		} else {
-			addrs = append(addrs, addrEntry{Family: 10, Address: []byte(srv.To16())}) // AF_INET6
-		}
-	}
-	if err := obj.Call(resolvedIface+".SetLinkDNS", 0, idx, addrs).Err; err != nil {
-		return fmt.Errorf("dns: SetLinkDNS: %w", err)
-	}
-
-	if len(cfg.SearchDomains) > 0 {
-		// SetLinkDomains(ifindex int32, domains []struct{domain string, search_only bool})
-		type domainEntry struct {
-			Domain     string
-			SearchOnly bool
-		}
-		var domains []domainEntry
-		for _, d := range cfg.SearchDomains {
-			domains = append(domains, domainEntry{Domain: d, SearchOnly: false})
-		}
-		if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
-			return fmt.Errorf("dns: SetLinkDomains: %w", err)
-		}
-	}
-	return nil
-}
-
-// RevertResolved removes per-interface DNS settings set by ApplyResolved.
-// Calls org.freedesktop.resolve1.Manager.RevertLink directly over D-Bus.
-func RevertResolved(ifName string) error {
-	idx, err := ifIndex(ifName)
-	if err != nil {
-		return err
-	}
-
-	conn, err := dbus.ConnectSystemBus()
-	if err != nil {
-		return fmt.Errorf("dns: system bus: %w", err)
-	}
-	defer conn.Close()
-
-	obj := conn.Object(resolvedDest, resolvedPath)
-	if err := obj.Call(resolvedIface+".RevertLink", 0, idx).Err; err != nil {
-		return fmt.Errorf("dns: RevertLink: %w", err)
 	}
 	return nil
 }
@@ -243,52 +126,12 @@ type Backend int
 const (
 	// BackendNone means no DNS configuration was applied (no servers pushed).
 	BackendNone Backend = iota
-	// BackendResolved means ApplyResolved (resolvectl) was used.
+	// BackendResolved means the platform-native resolver API was used
+	// (systemd-resolved on Linux; networksetup on macOS).
 	BackendResolved
 	// BackendResolvConf means ApplyResolvConf (/etc/resolv.conf) was used.
 	BackendResolvConf
 )
-
-// Apply applies cfg using the best available backend:
-//  1. Try ApplyResolved (direct D-Bus to systemd-resolved, no polkit).
-//  2. Fall back to ApplyResolvConf (overwrites /etc/resolv.conf).
-//
-// backupPath is the path where the old /etc/resolv.conf is saved when
-// falling back to the resolv.conf backend.  Pass "" to skip the backup.
-//
-// Returns the Backend that was actually used, so Revert can call the matching
-// cleanup function.
-func Apply(cfg *Config, ifName, backupPath string) (Backend, error) {
-	if err := ApplyResolved(cfg, ifName); err == nil {
-		return BackendResolved, nil
-	} else {
-		fmt.Fprintf(os.Stderr, "dns: resolved D-Bus failed (%v), falling back to /etc/resolv.conf\n", err)
-	}
-	if backupPath != "" {
-		if err := BackupResolvConf(backupPath); err != nil {
-			return BackendNone, err
-		}
-	}
-	return BackendResolvConf, ApplyResolvConf(cfg)
-}
-
-// Revert removes the DNS configuration applied by Apply.
-// Pass the Backend returned by Apply so the correct cleanup path is used.
-//
-// Previously Revert guessed the backend by checking whether resolvectl was
-// available, which was incorrect when Apply had fallen back to ResolvConf
-// (e.g. because resolvectl was available but returned an error for the
-// specific interface).
-func Revert(backend Backend, ifName, backupPath string) error {
-	switch backend {
-	case BackendResolved:
-		return RevertResolved(ifName)
-	case BackendResolvConf:
-		return RestoreResolvConf(backupPath)
-	default:
-		return nil
-	}
-}
 
 // IsManaged reports whether path (typically /etc/resolv.conf) was written by
 // go-openlawsvpn (i.e. the first line is the managed-file comment).
