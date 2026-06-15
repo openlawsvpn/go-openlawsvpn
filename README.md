@@ -8,9 +8,9 @@ Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 ## Status
 
 Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android (via the
-gomobile `.aar`). Released — current tag **v1.0.9** (see `git tag`). The `.aar`
+gomobile `.aar`). Released — current tag **v1.1.1** (see `git tag`). The `.aar`
 build pipeline is in `.github/workflows/aar.yml`; RPMs are built by COPR
-`vorona/openlawsvpn`.
+`vorona/openlawsvpn`; Arch Linux packages on AUR as `openlawsvpn`.
 
 ### Components
 
@@ -55,6 +55,19 @@ make rpm     # builds binary RPMs via mock
 
 Produces three sub-packages: `openlawsvpn-daemon`, `openlawsvpn-gui`, and
 `openlawsvpn` (meta).
+
+### Arch Linux (AUR)
+
+```bash
+# Using an AUR helper:
+paru -S openlawsvpn
+
+# Or manually:
+git clone https://aur.archlinux.org/openlawsvpn.git
+cd openlawsvpn && makepkg -si
+```
+
+Installs `openlawsvpn-daemon`, `openlawsvpn-cli`, and `openlawsvpn-gui`.
 
 ### Daemon D-Bus interface
 
@@ -101,13 +114,22 @@ RPM packages are **not** built in this repo's CI — they are built by COPR
 ### Publishing a new release
 
 ```bash
-git tag v1.0.10
-git push origin v1.0.10
+git tag v1.1.2
+git push origin v1.1.2
 ```
 
 The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
 Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
 PR bumping the pinned AAR version automatically.
+
+**AUR release:** push a `pkg/x.y.z-N` tag to trigger PKGBUILD updates:
+
+```bash
+git tag pkg/1.1.2-1
+git push origin pkg/1.1.2-1
+make aur-release VERSION=1.1.2-1   # updates PKGBUILD, hash, .SRCINFO in ../aur-openlawsvpn
+# then: cd ../aur-openlawsvpn && git add -A && git commit -m "..." && git push
+```
 
 **Cross-repo auth:** writes use the `openlawsvpn-ci` GitHub App via
 `actions/create-github-app-token` — secrets `CI_APP_ID` / `CI_APP_PRIVATE_KEY`.

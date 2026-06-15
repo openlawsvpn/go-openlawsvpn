@@ -1,8 +1,10 @@
+//go:build linux
+
 // Unit tests for the tun package.
 //
-// The tests that require opening /dev/net/tun need root privileges and
-// a Linux kernel with TUN support. They are gated behind a runtime check
-// so they skip gracefully on systems where /dev/net/tun is not available.
+// The tests require /dev/net/tun and a Linux kernel with TUN support.
+// They skip gracefully when the device is unavailable or when not running
+// as root.
 package tun
 
 import (

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.0.9
+Version:        1.1.1
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -12,6 +12,7 @@ License:        LGPL-2.1-or-later
 
 URL:            https://github.com/openlawsvpn/go-openlawsvpn
 Source0:        {{{ git_repo_pack }}}
+Source1:        {{{ go_vendor_pack }}}
 
 # Tests are not shipped in the source tree — disable check bcond.
 %bcond check 0
@@ -67,6 +68,7 @@ Includes system-tray support via StatusNotifierItem.
 
 %prep
 %setup -T -b 0 -q -n go-openlawsvpn
+tar xzf %{SOURCE1}
 cd gui-gtk && %cargo_prep && cd -
 
 # ── Dynamic BuildRequires ─────────────────────────────────────────────────────
@@ -195,6 +197,15 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Thu Jun 11 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.1-1
+- feat(ios): add iOS xcframework build and CI workflow
+- ci: GPG-sign release binaries; add GitHub Artifact Attestation
+- fix(ios): add macOS gomobile stubs for GOOS=darwin without ios tag
+- fix(ci): dispatch bump-ios via workflow_dispatch (private repo restriction)
+- chore: add cross-platform-build pre-commit hook (linux/android/ios/darwin)
+- chore: reqwest 0.12→0.13 native-tls; trim tokio/env_logger/futures-util features
+- rpm: vendor Go deps via go_vendor_pack rpkg macro for offline mock builds
+
 * Mon Jun 01 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.9-1
 - feat(profile): add x-openlawsvpn-flow directive to force SAML/CRV1 flow
   for non-AWS servers (e.g. demo mockserver). Allows custom hostnames to use
@@ -224,7 +235,7 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 - fix(routing): accept single-arg route directives (no mask) as /32 host routes
   Stock OpenVPN CE pushes "route <peer-ip>" in net30 topology; was fatal parse error.
 
-* Tue May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
+* Wed May 13 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.0.5-1
 - fix(client): use net.JoinHostPort for IPv6 endpoint construction (PR#2)
   Replaces fmt.Sprintf("%s:%d") which produced invalid addresses for IPv6
   literals causing "too many colons in address" dial errors

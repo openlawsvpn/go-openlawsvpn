@@ -44,3 +44,7 @@ gui-gtk/.cargo/
 
 # Claude Code local settings
 .claude/
+
+# mock FC build results
+/rpm-results/
+/tmp/

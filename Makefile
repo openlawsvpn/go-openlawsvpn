@@ -22,7 +22,8 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep
+.PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
+        build-bins test-integration-cli aur-build aur-test-gui aur-release check-aur-release
 
 all: aar
 
@@ -54,6 +55,13 @@ aar-sha256: go-openlawsvpn.aar
 cli:
 	CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 
+## Build macOS CLI binaries (arm64 + amd64; requires sudo to run — utun needs root).
+build-macos-cli:
+	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build \
+		-o openlawsvpn-cli-macos-arm64 ./cmd/cli
+	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build \
+		-o openlawsvpn-cli-macos-amd64 ./cmd/cli
+
 ## Build the local relay-server test binary
 relay-server:
 	CGO_ENABLED=0 go build -o relay-server ./cmd/relay-server
@@ -79,6 +87,17 @@ test:
 ## Run integration tests (starts local mock server, no Docker needed)
 integration-test:
 	go test -v -tags=integration -timeout 120s .
+
+## Build CLI + mock-server binaries into bin/
+build-bins:
+	mkdir -p bin
+	go build -o bin/mock-server ./mock/mockserver
+	CGO_ENABLED=0 go build -o bin/openlawsvpn-cli ./cmd/cli
+
+## CLI binary integration test: starts mock server, connects CLI in daemon mode, asserts tunnel up.
+## Requires sudo (TUN device creation). Binaries are built automatically if missing.
+test-integration-cli: build-bins
+	bash scripts/cli-integration.sh
 
 ## Run go vet
 lint:
@@ -130,4 +149,63 @@ builddep: srpm
 ## Remove build artefacts
 clean:
 	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui
-	rm -rf rpmbuild gui-gtk/target
+	rm -rf rpmbuild gui-gtk/target bin/
+
+## Test the AUR PKGBUILD: runs makepkg inside an Arch Linux Podman container.
+## Requires: podman (Fedora: sudo dnf install podman), internet access.
+aur-build:
+	bash packaging/test-aur.sh
+
+## Run the AUR build + GUI smoke test (Xvfb). Adds xorg-server-xvfb inside the container.
+aur-test-gui:
+	bash packaging/test-aur.sh --gui
+
+## Bump PKGBUILD to a new packaging release and regenerate .SRCINFO.
+## VERSION must be pkgver-pkgrel, e.g.: make aur-release VERSION=1.2.0-1
+## AUR_DIR: path to the aur-openlawsvpn git clone (default: ../aur-openlawsvpn)
+AUR_DIR ?= ../aur-openlawsvpn
+aur-release:
+	@test -n "$(VERSION)" || { echo "Usage: make aur-release VERSION=x.y.z-N"; exit 1; }
+	@VER="$(VERSION)"; \
+	PKGVER=$${VER%-*}; PKGREL=$${VER##*-}; \
+	echo "Releasing pkgver=$$PKGVER pkgrel=$$PKGREL"; \
+	sed -i "s/^pkgver=.*/pkgver=$$PKGVER/" packaging/PKGBUILD; \
+	sed -i "s/^pkgrel=.*/pkgrel=$$PKGREL/" packaging/PKGBUILD; \
+	echo "Downloading pkg/$$PKGVER-$$PKGREL tarball..."; \
+	SHA=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$${PKGVER}-$${PKGREL}.tar.gz" | sha256sum | cut -d' ' -f1); \
+	sed -i "s/^sha256sums=.*/sha256sums=('$$SHA')/" packaging/PKGBUILD; \
+	echo "sha256=$$SHA"; \
+	cp packaging/PKGBUILD packaging/openlawsvpn.install "$(AUR_DIR)/"; \
+	podman run --rm --security-opt label=disable \
+	  -v "$$(realpath $(AUR_DIR)):/pkg" archlinux:base-devel \
+	  bash -c "useradd -m b; chown -R b /pkg; su b -c 'cd /pkg && makepkg --printsrcinfo'" \
+	  > "$(AUR_DIR)/.SRCINFO"; \
+	echo "Updated $(AUR_DIR): PKGBUILD .SRCINFO openlawsvpn.install"
+
+## Verify the current PKGBUILD is consistent: pkg/ tag exists on remote and sha256 matches.
+## Usage: make check-aur-release   (reads pkgver/pkgrel from packaging/PKGBUILD)
+check-aur-release:
+	@PKGVER=$$(grep '^pkgver=' packaging/PKGBUILD | cut -d= -f2); \
+	PKGREL=$$(grep '^pkgrel=' packaging/PKGBUILD | cut -d= -f2); \
+	EXPECTED=$$(grep '^sha256sums=' packaging/PKGBUILD | grep -o "'[^']*'" | tr -d "'"); \
+	echo "Checking pkg/$$PKGVER-$$PKGREL ..."; \
+	git ls-remote --exit-code origin "refs/tags/pkg/$$PKGVER-$$PKGREL" >/dev/null \
+	  || { echo "ERROR: tag pkg/$$PKGVER-$$PKGREL not found on origin"; exit 1; }; \
+	echo "Tag exists. Fetching tarball to verify sha256..."; \
+	ACTUAL=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$${PKGVER}-$${PKGREL}.tar.gz" | sha256sum | cut -d' ' -f1); \
+	if [ "$$ACTUAL" = "$$EXPECTED" ]; then \
+	  echo "OK: sha256 matches ($$ACTUAL)"; \
+	else \
+	  echo "ERROR: sha256 mismatch"; \
+	  echo "  PKGBUILD: $$EXPECTED"; \
+	  echo "  actual:   $$ACTUAL"; \
+	  exit 1; \
+	fi
+
+## FC sandbox build
+PROJECTNAME=openlawsvpn
+RPM_VERSION=$(shell rpmspec -q --srpm --qf "%{Version}-%{Release}" ${SPEC})
+FEDORA_VERSION=$(shell rpm -E %fedora)
+
+fc: srpm
+	mock --no-clean -r fedora-$(FEDORA_VERSION)-x86_64 --resultdir=rpm-results $(RPM_OUTDIR)/SRPMS/$(PROJECTNAME)-${RPM_VERSION}.src.rpm
