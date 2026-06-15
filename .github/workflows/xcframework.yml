@@ -63,7 +63,7 @@ jobs:
       - name: Package and checksum
         id: checksum
         run: |
-          zip -r go-openlawsvpn.xcframework.zip go-openlawsvpn.xcframework
+          zip -ry go-openlawsvpn.xcframework.zip go-openlawsvpn.xcframework
           sha256sum go-openlawsvpn.xcframework.zip > go-openlawsvpn.xcframework.zip.sha256
           echo "sha256=$(awk '{print $1}' go-openlawsvpn.xcframework.zip.sha256)" >> $GITHUB_OUTPUT
 
