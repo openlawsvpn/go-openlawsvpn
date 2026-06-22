@@ -45,11 +45,42 @@ func (d *Device) File() *os.File { return d.file }
 // Close closes the TUN device file descriptor.
 func (d *Device) Close() error { return d.file.Close() }
 
-// Read reads one IP packet from the TUN device.
-func (d *Device) Read(buf []byte) (int, error) { return d.file.Read(buf) }
+// utun protocol-family header constants (network byte order). The iOS NE fd we
+// receive from the Swift socket scan is a raw utun control socket — the same
+// kernel interface as macOS — so it prepends a 4-byte AF_ header to every packet
+// read and requires one on every packet written. (NEPacketTunnelFlow would hide
+// this, but we read the fd directly.) AF_INET = 2, AF_INET6 = 30 on Darwin.
+var (
+	utunPktInfoAFInet  = [4]byte{0x00, 0x00, 0x00, 0x02}
+	utunPktInfoAFInet6 = [4]byte{0x00, 0x00, 0x00, 0x1e}
+)
 
-// Write writes one IP packet to the TUN device.
-func (d *Device) Write(pkt []byte) (int, error) { return d.file.Write(pkt) }
+// Read reads one IP packet from the utun device, stripping the 4-byte AF header.
+func (d *Device) Read(buf []byte) (int, error) {
+	tmp := make([]byte, len(buf)+4)
+	n, err := d.file.Read(tmp)
+	if err != nil {
+		return 0, err
+	}
+	if n < 4 {
+		return 0, nil
+	}
+	return copy(buf, tmp[4:n]), nil
+}
+
+// Write writes one IP packet to the utun device, prepending the 4-byte AF header
+// matching the packet's IP version.
+func (d *Device) Write(pkt []byte) (int, error) {
+	hdr := utunPktInfoAFInet
+	if len(pkt) > 0 && pkt[0]>>4 == 6 {
+		hdr = utunPktInfoAFInet6
+	}
+	buf := make([]byte, 4+len(pkt))
+	copy(buf[:4], hdr[:])
+	copy(buf[4:], pkt)
+	_, err := d.file.Write(buf)
+	return len(pkt), err
+}
 
 // Configure is a no-op on iOS: NEPacketTunnelNetworkSettings already configured
 // the interface before handing us the fd.
