@@ -116,6 +116,57 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 	return nil
 }
 
+// LookupGateway returns the gateway for the best route to dst by parsing
+// the output of "/sbin/route -n get <dst>".  Returns (nil, nil) for direct
+// link routes (no gateway line in the output).
+func LookupGateway(dst net.IP) (net.IP, error) {
+	out, err := exec.Command("/sbin/route", "-n", "get", dst.String()).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("routing: lookup gateway: /sbin/route get %s: %w — %s", dst, err, out)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "gateway:") {
+			continue
+		}
+		gw := net.ParseIP(strings.TrimSpace(strings.TrimPrefix(line, "gateway:")))
+		if gw == nil {
+			return nil, fmt.Errorf("routing: lookup gateway: unparseable gateway in: %q", line)
+		}
+		return gw.To4(), nil
+	}
+	return nil, nil // direct link route — no gateway
+}
+
+// AddBypassRoute adds a /32 host route for serverIP via gw so the VPN server
+// is never routed through the TUN after redirect-gateway is applied.
+// A nil gateway is a no-op (direct link needs no bypass).
+func AddBypassRoute(serverIP, gw net.IP) error {
+	if gw == nil {
+		return nil
+	}
+	err := routeAdd(serverIP, net.CIDRMask(32, 32), gw, "")
+	if isRouteExists(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
+	}
+	return nil
+}
+
+// DeleteBypassRoute removes the /32 bypass route added by AddBypassRoute.
+func DeleteBypassRoute(serverIP, gw net.IP) error {
+	if gw == nil {
+		return nil
+	}
+	err := routeDel(serverIP, net.CIDRMask(32, 32), gw, "")
+	if err != nil && !strings.Contains(err.Error(), "not in table") {
+		return fmt.Errorf("routing: delete bypass route for %s: %w", serverIP, err)
+	}
+	return nil
+}
+
 // AddIPv6Addr is a no-op on macOS — IPv6 address is set by Configure() via
 // SIOCSIFADDR_IN6 (not implemented yet; macOS CLI is IPv4-only for now).
 func AddIPv6Addr(_ int, _ net.IP, _ int) error { return nil }

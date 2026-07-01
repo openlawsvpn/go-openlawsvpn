@@ -146,6 +146,10 @@ type Client struct {
 	// mssFix is the effective MSS clamp in bytes (0 = disabled).
 	// Set from pushOpts.Mssfix (server) or prof.MSSFix (profile), server wins.
 	mssFix int
+	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
+	// when redirect-gateway is active, so cleanup can remove it on disconnect.
+	serverBypassIP net.IP
+	serverBypassGW net.IP
 
 	// nextKeyID is the key_id for the next renegotiated TLS session.
 	// Incremented mod 8 after each renegotiation (key_id 0 is reserved for
@@ -1032,6 +1036,8 @@ func (c *Client) reset() {
 	c.dnsOpts = nil
 	c.dnsBackup = ""
 	c.dnsBackend = dns.BackendNone
+	c.serverBypassIP = nil
+	c.serverBypassGW = nil
 	c.phase1IP = ""
 	c.connectedAt = time.Time{}
 	// cachedSAMLToken, cachedSAMLExpiry, cachedStateID, cachedPhase1IP are
@@ -2110,6 +2116,11 @@ func (c *Client) cleanup() {
 			if err == nil {
 				routing.DeleteRoutes(c.pushOpts, iface.Index) //nolint:errcheck
 			}
+		}
+		if c.serverBypassIP != nil {
+			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
+			c.serverBypassIP = nil
+			c.serverBypassGW = nil
 		}
 		if c.dnsOpts != nil {
 			dns.Revert(c.dnsBackend, c.tunDev.Name(), c.dnsBackup) //nolint:errcheck
