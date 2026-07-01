@@ -2111,11 +2111,24 @@ func (c *Client) cleanup() {
 		c.dataCh = nil
 	}
 	if c.tunDev != nil {
-		if c.pushOpts != nil {
-			iface, err := net.InterfaceByName(c.tunDev.Name())
-			if err == nil {
-				routing.DeleteRoutes(c.pushOpts, iface.Index) //nolint:errcheck
-			}
+		// Capture names/indices before closing the device.
+		tunName := c.tunDev.Name()
+		var ifIndex int
+		if iface, err := net.InterfaceByName(tunName); err == nil {
+			ifIndex = iface.Index
+		}
+
+		// Close the TUN device first so the kernel removes the interface and
+		// all routes associated with it (including redirect-gateway 0.0.0.0/0).
+		// On macOS, attempting to delete routes via /sbin/route while the TUN
+		// gateway host route has already been removed causes /sbin/route to
+		// block indefinitely waiting to resolve the now-unreachable gateway.
+		c.tunDev.Close()
+		c.tunDev = nil
+
+		// Belt-and-suspenders route cleanup after the interface is gone.
+		if c.pushOpts != nil && ifIndex != 0 {
+			routing.DeleteRoutes(c.pushOpts, ifIndex) //nolint:errcheck
 		}
 		if c.serverBypassIP != nil {
 			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
@@ -2123,10 +2136,8 @@ func (c *Client) cleanup() {
 			c.serverBypassGW = nil
 		}
 		if c.dnsOpts != nil {
-			dns.Revert(c.dnsBackend, c.tunDev.Name(), c.dnsBackup) //nolint:errcheck
+			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
 		}
-		c.tunDev.Close()
-		c.tunDev = nil
 	}
 }
 
