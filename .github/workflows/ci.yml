@@ -34,7 +34,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
+        redirect_gateway: ["", "1"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
 
     steps:
       - name: Checkout code
@@ -57,11 +59,12 @@ jobs:
           CLI_BIN: bin/openlawsvpn-cli
           MOCK_BIN: bin/mock-server
           SUDO: sudo
+          MOCK_REDIRECT_GATEWAY: ${{ matrix.redirect_gateway }}
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: cli-integration-logs-${{ matrix.os }}
+          name: cli-integration-logs-${{ matrix.os }}-rg${{ matrix.redirect_gateway }}
           path: tmp/openlawsvpn-cli.*.log
           if-no-files-found: ignore

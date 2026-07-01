@@ -137,3 +137,15 @@ if ! grep -q '"event":"push_reply"' "$MOCK_LOG"; then
 fi
 
 echo "PASS: CLI connected and daemonized; mock server sent push_reply"
+
+# When the mock server pushed redirect-gateway def1, verify the daemon logged
+# its bypass-route decision.  Old code (no bypass fix) emits nothing here.
+if [[ "${MOCK_REDIRECT_GATEWAY:-}" == "1" ]] && [[ "$(uname -s)" == "Linux" ]]; then
+    echo "Checking redirect-gateway bypass route handling in daemon log..."
+    if grep -q "redirect-gateway bypass route\|redirect-gateway: server" "$CLI_LOG" 2>/dev/null; then
+        echo "PASS: redirect-gateway bypass route handling logged"
+    else
+        echo "FAIL: redirect-gateway active but no bypass route decision in daemon log"
+        exit 1
+    fi
+fi
