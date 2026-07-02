@@ -39,6 +39,27 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 				fmt.Fprintf(os.Stderr, "vpn: configure IPv6 address: %v\n", v6Err)
 			}
 		}
+		// When redirect-gateway is active, add a /32 bypass route for the VPN
+		// server BEFORE the default route is installed.  Without this, the new
+		// 0.0.0.0/0 via tun overrides the physical-interface route to the server,
+		// causing the VPN's own TCP connection to loop through the tunnel and die.
+		if pushOpts.RedirectGateway {
+			if sip := net.ParseIP(c.phase1IP); sip != nil {
+				if gw, gwErr := routing.LookupGateway(sip); gwErr == nil {
+					if gw == nil {
+						fmt.Fprintf(os.Stderr, "vpn: redirect-gateway: server %s is direct-link, no bypass needed\n", sip)
+					} else if berr := routing.AddBypassRoute(sip, gw); berr == nil {
+						fmt.Fprintf(os.Stderr, "vpn: redirect-gateway bypass route: %s via %s\n", sip, gw)
+						c.serverBypassIP = sip
+						c.serverBypassGW = gw
+					} else {
+						fmt.Fprintf(os.Stderr, "vpn: add bypass route: %v\n", berr)
+					}
+				} else {
+					fmt.Fprintf(os.Stderr, "vpn: lookup gateway for bypass: %v\n", gwErr)
+				}
+			}
+		}
 		if routeErr := routing.ApplyRoutes(pushOpts, iface.Index); routeErr != nil {
 			fmt.Fprintf(os.Stderr, "vpn: apply routes: %v\n", routeErr)
 		}

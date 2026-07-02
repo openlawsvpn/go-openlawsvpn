@@ -166,7 +166,9 @@ func DeleteRoutes(opts *PushOptions, ifIndex int) error {
 // netlinkRouteMsg builds and sends a single RTM_NEWROUTE or RTM_DELROUTE
 // netlink message for an IPv4 route.
 //
-// Layout: nlmsghdr (16B) + rtmsg (12B) + RTA_DST + RTA_GATEWAY + RTA_OIF
+// Layout: nlmsghdr (16B) + rtmsg (12B) + RTA_DST + RTA_GATEWAY [+ RTA_OIF]
+// RTA_OIF is omitted when ifIndex == 0; the kernel resolves the output
+// interface from the gateway in that case.
 func netlinkRouteMsg(msgType uint16, flags uint16,
 	ifIndex int, dst net.IP, mask net.IPMask, gw net.IP) error {
 
@@ -201,9 +203,12 @@ func netlinkRouteMsg(msgType uint16, flags uint16,
 	dst4 := dst.To4()
 	rtaDst := nlAttr(unix.RTA_DST, dst4)
 
-	var oifBuf [4]byte
-	binary.LittleEndian.PutUint32(oifBuf[:], uint32(ifIndex))
-	rtaOIF := nlAttr(unix.RTA_OIF, oifBuf[:])
+	var rtaOIF []byte
+	if ifIndex > 0 {
+		var oifBuf [4]byte
+		binary.LittleEndian.PutUint32(oifBuf[:], uint32(ifIndex))
+		rtaOIF = nlAttr(unix.RTA_OIF, oifBuf[:])
+	}
 
 	var rtaGW []byte
 	if gw != nil {
@@ -302,6 +307,140 @@ func addRoute(ifIndex int, dst net.IP, mask net.IPMask, gw net.IP) error {
 // delRoute removes an IPv4 route via RTM_DELROUTE.
 func delRoute(ifIndex int, dst net.IP, mask net.IPMask, gw net.IP) error {
 	return netlinkRouteMsg(unix.RTM_DELROUTE, 0, ifIndex, dst, mask, gw)
+}
+
+// LookupGateway returns the gateway IP for the best route to dst in the main
+// routing table.  Returns (nil, nil) when the route is a direct link route
+// (no gateway — dst is on a directly connected subnet).
+func LookupGateway(dst net.IP) (net.IP, error) {
+	dst4 := dst.To4()
+	if dst4 == nil {
+		return nil, fmt.Errorf("routing: LookupGateway: IPv4 address required, got %v", dst)
+	}
+
+	sock, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
+	if err != nil {
+		return nil, fmt.Errorf("routing: lookup gateway: socket: %w", err)
+	}
+	defer unix.Close(sock)
+
+	lsa := unix.SockaddrNetlink{Family: unix.AF_NETLINK}
+	if err := unix.Bind(sock, &lsa); err != nil {
+		return nil, fmt.Errorf("routing: lookup gateway: bind: %w", err)
+	}
+
+	rtMsg := unix.RtMsg{
+		Family:  unix.AF_INET,
+		Dst_len: 32,
+		Table:   unix.RT_TABLE_MAIN,
+	}
+	rtaDst := nlAttr(unix.RTA_DST, dst4)
+	payload := marshalRtMsg(rtMsg)
+	payload = append(payload, rtaDst...)
+
+	hdr := unix.NlMsghdr{
+		Len:   uint32(nlmsgHdrSize + len(payload)),
+		Type:  unix.RTM_GETROUTE,
+		Flags: unix.NLM_F_REQUEST,
+		Seq:   2,
+		Pid:   uint32(unix.Getpid()),
+	}
+	msg := marshalNlHdr(hdr)
+	msg = append(msg, payload...)
+	for len(msg)%4 != 0 {
+		msg = append(msg, 0)
+	}
+
+	ksa := unix.SockaddrNetlink{Family: unix.AF_NETLINK}
+	if err := unix.Sendto(sock, msg, 0, &ksa); err != nil {
+		return nil, fmt.Errorf("routing: lookup gateway: send: %w", err)
+	}
+
+	buf := make([]byte, 4096)
+	n, _, err := unix.Recvfrom(sock, buf, 0)
+	if err != nil {
+		return nil, fmt.Errorf("routing: lookup gateway: recv: %w", err)
+	}
+
+	return parseRouteGateway(buf[:n])
+}
+
+// parseRouteGateway extracts RTA_GATEWAY from a single RTM_GETROUTE response.
+// Returns (nil, nil) for direct link routes (no gateway attribute).
+func parseRouteGateway(buf []byte) (net.IP, error) {
+	if len(buf) < nlmsgHdrSize {
+		return nil, fmt.Errorf("routing: lookup gateway: short response")
+	}
+	msgType := binary.LittleEndian.Uint16(buf[4:6])
+	if msgType == unix.NLMSG_ERROR {
+		if len(buf) < nlmsgHdrSize+4 {
+			return nil, fmt.Errorf("routing: lookup gateway: error response too short")
+		}
+		errno := int32(binary.LittleEndian.Uint32(buf[nlmsgHdrSize:]))
+		if errno != 0 {
+			return nil, fmt.Errorf("routing: lookup gateway: %w", syscall.Errno(-errno))
+		}
+		return nil, nil
+	}
+	const rtmsgSize = 12
+	if len(buf) < nlmsgHdrSize+rtmsgSize {
+		return nil, nil
+	}
+	attrs := buf[nlmsgHdrSize+rtmsgSize:]
+	for len(attrs) >= 4 {
+		attrLen := int(binary.LittleEndian.Uint16(attrs[0:2]))
+		attrType := binary.LittleEndian.Uint16(attrs[2:4])
+		if attrLen < 4 {
+			break
+		}
+		if attrType == unix.RTA_GATEWAY && attrLen >= 8 {
+			gw := make(net.IP, 4)
+			copy(gw, attrs[4:attrLen])
+			return gw, nil
+		}
+		aligned := (attrLen + 3) &^ 3
+		if aligned > len(attrs) {
+			break
+		}
+		attrs = attrs[aligned:]
+	}
+	return nil, nil // direct link route — no gateway
+}
+
+// AddBypassRoute adds a /32 host route for serverIP via gw so that the VPN
+// server's traffic is never routed through the TUN after redirect-gateway is
+// applied.  A gateway of nil is accepted (direct link) but the route is only
+// useful when a gateway is present.  EEXIST is treated as success.
+func AddBypassRoute(serverIP, gw net.IP) error {
+	if gw == nil {
+		return nil // direct link — no bypass route needed
+	}
+	err := netlinkRouteMsg(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL,
+		0, serverIP, net.CIDRMask(32, 32), gw)
+	if errors.Is(err, syscall.EEXIST) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
+	}
+	return nil
+}
+
+// DeleteBypassRoute removes the /32 bypass route added by AddBypassRoute.
+// ESRCH (no such route) is treated as success.
+func DeleteBypassRoute(serverIP, gw net.IP) error {
+	if gw == nil {
+		return nil
+	}
+	err := netlinkRouteMsg(unix.RTM_DELROUTE, 0,
+		0, serverIP, net.CIDRMask(32, 32), gw)
+	if errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("routing: delete bypass route for %s: %w", serverIP, err)
+	}
+	return nil
 }
 
 // addRoute6 adds an IPv6 route via RTM_NEWROUTE.

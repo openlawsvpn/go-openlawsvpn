@@ -146,6 +146,10 @@ type Client struct {
 	// mssFix is the effective MSS clamp in bytes (0 = disabled).
 	// Set from pushOpts.Mssfix (server) or prof.MSSFix (profile), server wins.
 	mssFix int
+	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
+	// when redirect-gateway is active, so cleanup can remove it on disconnect.
+	serverBypassIP net.IP
+	serverBypassGW net.IP
 
 	// nextKeyID is the key_id for the next renegotiated TLS session.
 	// Incremented mod 8 after each renegotiation (key_id 0 is reserved for
@@ -1032,6 +1036,8 @@ func (c *Client) reset() {
 	c.dnsOpts = nil
 	c.dnsBackup = ""
 	c.dnsBackend = dns.BackendNone
+	c.serverBypassIP = nil
+	c.serverBypassGW = nil
 	c.phase1IP = ""
 	c.connectedAt = time.Time{}
 	// cachedSAMLToken, cachedSAMLExpiry, cachedStateID, cachedPhase1IP are
@@ -2105,17 +2111,33 @@ func (c *Client) cleanup() {
 		c.dataCh = nil
 	}
 	if c.tunDev != nil {
-		if c.pushOpts != nil {
-			iface, err := net.InterfaceByName(c.tunDev.Name())
-			if err == nil {
-				routing.DeleteRoutes(c.pushOpts, iface.Index) //nolint:errcheck
-			}
+		// Capture names/indices before closing the device.
+		tunName := c.tunDev.Name()
+		var ifIndex int
+		if iface, err := net.InterfaceByName(tunName); err == nil {
+			ifIndex = iface.Index
 		}
-		if c.dnsOpts != nil {
-			dns.Revert(c.dnsBackend, c.tunDev.Name(), c.dnsBackup) //nolint:errcheck
-		}
+
+		// Close the TUN device first so the kernel removes the interface and
+		// all routes associated with it (including redirect-gateway 0.0.0.0/0).
+		// On macOS, attempting to delete routes via /sbin/route while the TUN
+		// gateway host route has already been removed causes /sbin/route to
+		// block indefinitely waiting to resolve the now-unreachable gateway.
 		c.tunDev.Close()
 		c.tunDev = nil
+
+		// Belt-and-suspenders route cleanup after the interface is gone.
+		if c.pushOpts != nil && ifIndex != 0 {
+			routing.DeleteRoutes(c.pushOpts, ifIndex) //nolint:errcheck
+		}
+		if c.serverBypassIP != nil {
+			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
+			c.serverBypassIP = nil
+			c.serverBypassGW = nil
+		}
+		if c.dnsOpts != nil {
+			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
+		}
 	}
 }
 

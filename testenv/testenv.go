@@ -63,6 +63,11 @@ type Config struct {
 	// CRV1Mode, when true, starts the server in AUTH_FAILED,CRV1 mode.
 	CRV1Mode bool
 
+	// RedirectGateway, when true, instructs the mock server to include
+	// "redirect-gateway def1" in its PUSH_REPLY, simulating AWS Client VPN
+	// full-tunnel mode. Use this to test issue #7 bypass-route behaviour.
+	RedirectGateway bool
+
 	// Image overrides the default Docker image name (Docker mode only).
 	Image string
 
@@ -134,6 +139,9 @@ func startDocker(cfg Config) (*Server, error) {
 	if cfg.CRV1Mode {
 		args = append(args, "-e", "MOCK_CRV1=1")
 	}
+	if cfg.RedirectGateway {
+		args = append(args, "-e", "MOCK_REDIRECT_GATEWAY=1")
+	}
 	args = append(args, img)
 
 	out, err := exec.Command("docker", args...).Output()
@@ -169,6 +177,9 @@ func startBinary(binPath string, cfg Config) (*Server, error) {
 	env = append(env, fmt.Sprintf("MOCK_TCP_PORT=%d", tcpPort))
 	if cfg.CRV1Mode {
 		env = append(env, "MOCK_CRV1=1")
+	}
+	if cfg.RedirectGateway {
+		env = append(env, "MOCK_REDIRECT_GATEWAY=1")
 	}
 	if cfg.CertDir != "" {
 		env = append(env, "CERT_DIR="+cfg.CertDir)
