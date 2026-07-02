@@ -5,6 +5,7 @@ package vpn
 import (
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
 	"github.com/openlawsvpn/go-openlawsvpn/routing"
@@ -74,6 +75,10 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: interface lookup failed: %v", ifErr)})
 	}
 
+	if f, ferr := os.CreateTemp("", "openlawsvpn-resolv-*.conf"); ferr == nil {
+		c.dnsBackup = f.Name()
+		f.Close()
+	}
 	dnsBackend, dnsErr := dns.Apply(dnsOpts, dev.Name(), c.dnsBackup)
 	c.dnsBackend = dnsBackend
 	if dnsErr != nil {
