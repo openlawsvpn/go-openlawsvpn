@@ -137,6 +137,81 @@ func TestBackupAndRestore(t *testing.T) {
 	}
 }
 
+// TestRevertResolvConf verifies that Revert(BackendResolvConf) restores the
+// original file content and removes the backup.  This exercises the full
+// Apply→Revert cycle that cleanup() uses on disconnect.
+func TestRevertResolvConf(t *testing.T) {
+	dir := t.TempDir()
+	resolvFile := dir + "/resolv.conf"
+	backupFile := dir + "/resolv.conf.bak"
+
+	orig := ResolvConfPath
+	ResolvConfPath = resolvFile
+	defer func() { ResolvConfPath = orig }()
+
+	original := "nameserver 1.1.1.1\n"
+	if err := os.WriteFile(resolvFile, []byte(original), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := BackupResolvConf(backupFile); err != nil {
+		t.Fatalf("BackupResolvConf: %v", err)
+	}
+	vpnCfg := &Config{Servers: []net.IP{net.ParseIP("10.8.0.1")}}
+	if err := ApplyResolvConf(vpnCfg); err != nil {
+		t.Fatalf("ApplyResolvConf: %v", err)
+	}
+
+	if err := Revert(BackendResolvConf, "tun0", backupFile); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+
+	data, err := os.ReadFile(resolvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != original {
+		t.Errorf("after Revert: got %q, want %q", string(data), original)
+	}
+	if _, err := os.Stat(backupFile); !os.IsNotExist(err) {
+		t.Error("backup file should be removed after Revert")
+	}
+}
+
+// TestRevertResolvConfEmptyBackup documents that Revert with an empty backup
+// path is a no-op — the original resolv.conf is not restored.  This was the
+// behaviour before the fix (c.dnsBackup was always ""); openNativeTUN now
+// always provides a non-empty path.
+func TestRevertResolvConfEmptyBackup(t *testing.T) {
+	dir := t.TempDir()
+	resolvFile := dir + "/resolv.conf"
+
+	orig := ResolvConfPath
+	ResolvConfPath = resolvFile
+	defer func() { ResolvConfPath = orig }()
+
+	if err := os.WriteFile(resolvFile, []byte("nameserver 1.1.1.1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	vpnCfg := &Config{Servers: []net.IP{net.ParseIP("10.8.0.1")}}
+	if err := ApplyResolvConf(vpnCfg); err != nil {
+		t.Fatalf("ApplyResolvConf: %v", err)
+	}
+
+	// Empty backupPath — Revert must not crash and must leave the VPN config in place.
+	if err := Revert(BackendResolvConf, "tun0", ""); err != nil {
+		t.Fatalf("Revert with empty backupPath: %v", err)
+	}
+
+	data, err := os.ReadFile(resolvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(data), "10.8.0.1") {
+		t.Error("expected VPN nameserver still present (no backup to restore from)")
+	}
+}
+
 func TestIsManaged(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/resolv.conf"
