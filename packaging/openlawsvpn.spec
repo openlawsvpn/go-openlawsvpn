@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.1.4
+Version:        1.1.6
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,19 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Thu Jul 02 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.6-1
+- fix(routing): add /32 bypass route for VPN server IP before redirect-gateway
+  default route — prevents routing loop that dropped connection within 2s
+- fix(client): close TUN device before deleting routes on cleanup — fixes macOS
+  hang on disconnect when gateway host route was already removed
+- fix(dns): use temp file for resolv.conf backup so original DNS is always
+  restored on disconnect (was silently skipped with empty backup path)
+- test: add redirect-gateway matrix variant to CLI integration test
+- ci: trigger CI on push and PR to dev branch
+
+* Mon Jun 22 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.5-1
+- fix(ios): strip/prepend 4-byte AF header in utun Read/Write on iOS/macOS raw fd
+
 * Tue Jun 16 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.4-1
 - fix(macos): strip/prepend 4-byte utun AF header in Read/Write; add platform Read/Write methods to tun.Device
 - fix(macos): set sa_len in ifconfigAddr so kernel doesn't silently drop peer address

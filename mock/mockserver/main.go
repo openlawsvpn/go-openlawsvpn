@@ -7,14 +7,16 @@
 //
 // Environment:
 //
-//	MOCK_CRV1=1        — after auth exchange, Phase 1 sends AUTH_FAILED,CRV1
-//	                     instead of PUSH_REPLY; Phase 2 validates token then sends PUSH_REPLY
-//	MOCK_TCP_PORT      — TCP listen port (default 4433)
-//	MOCK_UDP_PORT      — UDP listen port (default 1194)
-//	CERT_DIR           — directory containing ca.crt server.crt server.key
-//	                     when unset, self-signed certs are generated in memory
-//	IDP_URL            — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login.html)
-//	DEMO_TOKEN         — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
+//	MOCK_CRV1=1              — after auth exchange, Phase 1 sends AUTH_FAILED,CRV1
+//	                           instead of PUSH_REPLY; Phase 2 validates token then sends PUSH_REPLY
+//	MOCK_REDIRECT_GATEWAY=1  — include "redirect-gateway def1" in PUSH_REPLY
+//	                           (simulates AWS Client VPN full-tunnel mode)
+//	MOCK_TCP_PORT            — TCP listen port (default 4433)
+//	MOCK_UDP_PORT            — UDP listen port (default 1194)
+//	CERT_DIR                 — directory containing ca.crt server.crt server.key
+//	                           when unset, self-signed certs are generated in memory
+//	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login.html)
+//	DEMO_TOKEN               — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
 package main
 
 import (
@@ -782,11 +784,17 @@ func authStr16(s string) []byte {
 }
 
 // buildPushReply returns a PUSH_REPLY options string suitable for basic tests.
+// When MOCK_REDIRECT_GATEWAY=1 is set, the reply includes "redirect-gateway def1"
+// to simulate AWS Client VPN full-tunnel mode (all traffic via the VPN).
 func buildPushReply() string {
-	return "PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5,route 10.8.0.0 255.255.0.0," +
+	base := "PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5,route 10.8.0.0 255.255.0.0," +
 		"dhcp-option DNS 10.8.0.1,cipher AES-256-GCM," +
 		"ping 10,ping-restart 60," +
-		"key-derivation tls-ekm\x00"
+		"key-derivation tls-ekm"
+	if os.Getenv("MOCK_REDIRECT_GATEWAY") == "1" {
+		base += ",redirect-gateway def1"
+	}
+	return base + "\x00"
 }
 
 // min returns the smaller of a and b.

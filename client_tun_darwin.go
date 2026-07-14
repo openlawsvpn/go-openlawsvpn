@@ -5,6 +5,7 @@ package vpn
 import (
 	"fmt"
 	"net"
+	"os"
 
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
 	"github.com/openlawsvpn/go-openlawsvpn/routing"
@@ -44,6 +45,26 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: configure IPv6 address: %v", v6Err)})
 			}
 		}
+		// Add /32 bypass route for the VPN server before the default route is
+		// installed, to prevent redirect-gateway from routing VPN traffic through
+		// the tunnel itself.
+		if pushOpts.RedirectGateway {
+			if sip := net.ParseIP(c.phase1IP); sip != nil {
+				if gw, gwErr := routing.LookupGateway(sip); gwErr == nil {
+					if gw == nil {
+						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: redirect-gateway: server %s is direct-link, no bypass needed", sip)})
+					} else if berr := routing.AddBypassRoute(sip, gw); berr == nil {
+						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: redirect-gateway bypass route: %s via %s", sip, gw)})
+						c.serverBypassIP = sip
+						c.serverBypassGW = gw
+					} else {
+						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: add bypass route: %v", berr)})
+					}
+				} else {
+					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: lookup gateway for bypass: %v", gwErr)})
+				}
+			}
+		}
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: applying %d routes via %s", len(pushOpts.Routes), dev.Name())})
 		if routeErr := routing.ApplyRoutes(pushOpts, iface.Index); routeErr != nil {
 			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: apply routes: %v", routeErr)})
@@ -54,6 +75,10 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: interface lookup failed: %v", ifErr)})
 	}
 
+	if f, ferr := os.CreateTemp("", "openlawsvpn-resolv-*.conf"); ferr == nil {
+		c.dnsBackup = f.Name()
+		f.Close()
+	}
 	dnsBackend, dnsErr := dns.Apply(dnsOpts, dev.Name(), c.dnsBackup)
 	c.dnsBackend = dnsBackend
 	if dnsErr != nil {
