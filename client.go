@@ -1176,10 +1176,27 @@ func buildTunnelOptions(proto profile.Proto) string {
 }
 
 // peerInfo is the IV_* capability advertisement sent in the auth packet.
-// Matches what openvpn3-core 3.11.6 sends on Linux (from observed traffic).
-// IV_PROTO=8094 enables NCP (cipher negotiation) and peer-id.
+//
+// IV_PROTO must advertise ONLY features this client actually implements — a
+// server enables a negotiated feature when the client claims it, and then speaks
+// it on the wire. The previous value 8094 also set IV_PROTO_DATA_EPOCH (bit 7,
+// "aead-epoch"), IV_PROTO_DYN_TLS_CRYPT (bit 6) and IV_PROTO_CC_EXIT_NOTIFY
+// (bit 8), none of which are implemented. AWS Client VPN honoured the epoch bit
+// and switched the data channel to epoch keys, whose packet format/key schedule
+// this client does not support, so every data packet failed to decrypt (control
+// channel and SAML still worked, but no traffic flowed).
+//
+// The value below advertises only:
+//
+//	IV_PROTO_DATA_V2        (1<<1 = 2)   P_DATA_V2 packets + peer-id
+//	IV_PROTO_REQUEST_PUSH   (1<<2 = 4)   client will send PUSH_REQUEST
+//	IV_PROTO_TLS_KEY_EXPORT (1<<3 = 8)   RFC5705 EKM data-key derivation
+//	IV_PROTO_AUTH_PENDING   (1<<4 = 16)  auth-pending / SAML(CRV1) flow
+//
+// = 30. This keeps EKM (correct key derivation) and the SAML flow while making
+// the server fall back to the classic AEAD data channel this client implements.
 // IV_CIPHERS lists GCM ciphers the client supports.
-const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=8094\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
+const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=30\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
 
 // sendAuthPacket sends the OpenVPN key-method-2 auth packet over the TLS
 // connection immediately after the TLS handshake completes.
