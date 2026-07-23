@@ -1180,8 +1180,8 @@ func buildTunnelOptions(proto profile.Proto) string {
 // IV_PROTO must advertise ONLY features this client actually implements — a
 // server enables a negotiated feature when the client claims it, and then speaks
 // it on the wire. The previous value 8094 also set IV_PROTO_DATA_EPOCH (bit 7,
-// "aead-epoch"), IV_PROTO_DYN_TLS_CRYPT (bit 6) and IV_PROTO_CC_EXIT_NOTIFY
-// (bit 8), none of which are implemented. AWS Client VPN honoured the epoch bit
+// "aead-epoch") and IV_PROTO_CC_EXIT_NOTIFY (bit 8), neither of which is
+// implemented. AWS Client VPN honoured the epoch bit
 // and switched the data channel to epoch keys, whose packet format/key schedule
 // this client does not support, so every data packet failed to decrypt (control
 // channel and SAML still worked, but no traffic flowed).
