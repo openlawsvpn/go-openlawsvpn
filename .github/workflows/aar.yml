@@ -92,9 +92,19 @@ jobs:
   bump-android-go:
     needs: build-aar
     if: github.event_name == 'push'
-    uses: openlawsvpn/openlawsvpn-android-go/.github/workflows/bump-aar.yml@main
-    with:
-      version: ${{ needs.build-aar.outputs.tag }}
-    secrets:
-      CI_APP_ID: ${{ secrets.CI_APP_ID }}
-      CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@v1
+        id: app-token
+        with:
+          app-id: ${{ secrets.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          repositories: openlawsvpn-android-go
+
+      - name: Dispatch Android AAR bump
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          VERSION="${{ needs.build-aar.outputs.tag }}"
+          printf '{"event_type":"bump-aar","client_payload":{"version":"%s"}}\n' "$VERSION" |
+            gh api repos/openlawsvpn/openlawsvpn-android-go/dispatches --method POST --input -
