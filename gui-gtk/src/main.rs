@@ -30,15 +30,17 @@ const APP_ID: &str = "com.openlawsvpn.gui";
 
 const STYLE: &str = "
 /* ── Log / About text area ── */
-.log-view {
-    background-color: #f5f5f5;
+/* Use libadwaita's named theme colors so the log always tracks the active
+   light/dark scheme. Setting both bg and fg from the same palette keeps them
+   consistent, and @view_*_color flip automatically without relying on the
+   GTK `prefers-color-scheme` media query (which does not fire reliably on
+   every desktop, e.g. Fedora/GNOME dark mode). */
+.log-view,
+.log-view text {
+    background-color: @view_bg_color;
+    color: @view_fg_color;
     font-family: monospace;
     font-size: 11px;
-}
-@media (prefers-color-scheme: dark) {
-    .log-view {
-        background-color: #1e1e1e;
-    }
 }
 
 /* ── Profile cards ── */

@@ -78,7 +78,7 @@ type Stats struct {
 
 // controlSession bundles the reliable-transport state for one TLS key epoch.
 // The primary session (key_id=0) is created inside tlsHandshake; each rekey
-// epoch gets its own controlSession sent over rekeyRegCh.
+// epoch gets its own controlSession sent over rekeySessionCh.
 //
 // Reference: openvpn3-core ssl/proto.hpp KeyContext — one per key epoch.
 type controlSession struct {
@@ -91,6 +91,11 @@ type controlSession struct {
 	// doRekey waits on it before sending SOFT_RESET so the server's reply is
 	// never dropped due to a registration race.
 	registered chan struct{}
+	// peerReset and resetAcked are closed by the inbound relay during a rekey.
+	// OpenVPN starts TLS only after the peer's SOFT_RESET and the ACK for our
+	// own SOFT_RESET have both arrived.
+	peerReset  chan struct{}
+	resetAcked chan struct{}
 }
 
 // state tracks the internal lifecycle of a Client.
@@ -1176,10 +1181,27 @@ func buildTunnelOptions(proto profile.Proto) string {
 }
 
 // peerInfo is the IV_* capability advertisement sent in the auth packet.
-// Matches what openvpn3-core 3.11.6 sends on Linux (from observed traffic).
-// IV_PROTO=8094 enables NCP (cipher negotiation) and peer-id.
+//
+// IV_PROTO must advertise ONLY features this client actually implements — a
+// server enables a negotiated feature when the client claims it, and then speaks
+// it on the wire. The previous value 8094 (0x1f9e) also advertised
+// CC_EXIT_NOTIFY (1<<7), AUTH_FAIL_TEMP (1<<8), DYN_TLS_CRYPT (1<<9),
+// DATA_EPOCH (1<<10), DNS_OPTION_V2 (1<<11), and PUSH_UPDATE (1<<12).
+// None is implemented here. In particular, a server that selects DATA_EPOCH
+// uses a data-channel packet format and key schedule this client cannot decode;
+// control-channel TLS and SAML may still succeed while all data packets fail.
+//
+// The value below advertises only:
+//
+//	IV_PROTO_DATA_V2        (1<<1 = 2)   P_DATA_V2 packets + peer-id
+//	IV_PROTO_REQUEST_PUSH   (1<<2 = 4)   client will send PUSH_REQUEST
+//	IV_PROTO_TLS_KEY_EXPORT (1<<3 = 8)   RFC5705 EKM data-key derivation
+//	IV_PROTO_AUTH_PENDING   (1<<4 = 16)  auth-pending / SAML(CRV1) flow
+//
+// = 30. This keeps EKM (correct key derivation) and the SAML flow while making
+// the server fall back to the classic AEAD data channel this client implements.
 // IV_CIPHERS lists GCM ciphers the client supports.
-const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=8094\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
+const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=30\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
 
 // sendAuthPacket sends the OpenVPN key-method-2 auth packet over the TLS
 // connection immediately after the TLS handshake completes.
@@ -1493,88 +1515,151 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 	}
 	startSendGoroutine(primSess)
 
-	// inbound relay: owns ALL reads from rawConn for the connection lifetime.
-	// Routes by opcode: P_DATA_V2 → dataCh, P_CONTROL_V1/P_ACK_V1 → session.
-	// Also picks up new rekey sessions from rekeySessionCh and registers them.
+	// Keep reads in their own goroutine so the dispatcher can register a rekey
+	// session immediately.  A dispatcher which reads synchronously cannot see a
+	// rekeySessionCh notification while it is blocked waiting for network input;
+	// that leaves a narrow window where a peer's SOFT_RESET is dropped.
+	type inboundPacket struct {
+		pkt []byte
+		err error
+	}
+	packets := make(chan inboundPacket, 1)
+	relayDone := make(chan struct{})
 	go func() {
+		defer close(packets)
+		for {
+			pkt, err := c.readPacket(rawConn)
+			select {
+			case packets <- inboundPacket{pkt: pkt, err: err}:
+			case <-relayDone:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// inbound relay dispatches packets from the raw-reader and registers every
+	// new control session before its SOFT_RESET is sent.
+	go func() {
+		defer close(relayDone)
 		defer primSess.transport.Close()
 		for {
-			// Non-blocking check for new rekey session from doRekey.
-			// startSendGoroutine is called here so only one goroutine mutates sessions.
 			select {
 			case sess := <-c.rekeySessionCh:
+				if sess == nil {
+					continue
+				}
 				sessionsMu.Lock()
 				sessions[sess.keyID] = sess
 				sessionsMu.Unlock()
 				startSendGoroutine(sess)
 				close(sess.registered) // unblock doRekey; SOFT_RESET is sent after this
-			default:
-			}
 
-			pkt, err := c.readPacket(rawConn)
-			if err != nil {
-				// Close secondary transports so their TLS handshakes unblock.
-				sessionsMu.Lock()
-				for kid, sess := range sessions {
-					if kid != 0 {
-						sess.transport.Close()
+			case inbound, ok := <-packets:
+				if !ok || inbound.err != nil {
+					// Close secondary transports so their TLS handshakes unblock.
+					sessionsMu.Lock()
+					for kid, sess := range sessions {
+						if kid != 0 {
+							sess.transport.Close()
+						}
 					}
+					sessionsMu.Unlock()
+					return
 				}
-				sessionsMu.Unlock()
-				return
-			}
-			if len(pkt) < 1 {
-				continue
-			}
-			op := pkt[0] >> 3
-			keyID := pkt[0] & 0x07
+				pkt := inbound.pkt
+				if len(pkt) < 1 {
+					continue
+				}
+				op := pkt[0] >> 3
+				keyID := pkt[0] & 0x07
 
-			switch op {
-			case framing.P_DATA_V2:
-				// Lock-free fast path: dataCh is set once and never changed.
-				if c.dataCh != nil {
-					buf := make([]byte, len(pkt))
-					copy(buf, pkt)
+				switch op {
+				case framing.P_DATA_V2:
+					// Lock-free fast path: dataCh is set once and never changed.
+					if c.dataCh != nil {
+						buf := make([]byte, len(pkt))
+						copy(buf, pkt)
+						select {
+						case c.dataCh <- buf:
+						default:
+						}
+					}
+
+				case framing.P_CONTROL_V1:
+					payload, packetID := parseControlV1Payload(pkt)
+					ack := buildAck(c.clientSID, c.serverSID, []uint32{packetID})
+					c.writePacket(rawConn, ack) //nolint:errcheck
+
+					sessionsMu.Lock()
+					sess, ok := sessions[keyID]
+					sessionsMu.Unlock()
+					if !ok {
+						break
+					}
+					payloads, _ := sess.recvWindow.Receive(packetID, payload)
+					for _, p := range payloads {
+						if len(p) > 0 {
+							sess.transport.InjectInbound(p) //nolint:errcheck
+						}
+					}
+
+				case framing.P_CONTROL_SOFT_RESET_V1:
+					// A rekey is a reset exchange, not TLS data.  Acknowledge the
+					// peer's reset and record it so doRekey can start TLS only after
+					// both sides have completed the reliable reset handshake.
+					_, packetID := parseControlV1Payload(pkt)
+					ack := buildAck(c.clientSID, c.serverSID, []uint32{packetID})
+					c.writePacket(rawConn, ack) //nolint:errcheck
+
+					sessionsMu.Lock()
+					sess, ok := sessions[keyID]
+					sessionsMu.Unlock()
+					if !ok || sess.peerReset == nil {
+						break
+					}
+					for _, id := range parseControlV1AckIDs(pkt) {
+						sess.sendQueue.Ack(id)
+						if id == 0 && sess.resetAcked != nil {
+							select {
+							case <-sess.resetAcked:
+							default:
+								close(sess.resetAcked)
+							}
+						}
+					}
 					select {
-					case c.dataCh <- buf:
+					case <-sess.peerReset:
 					default:
+						close(sess.peerReset)
 					}
-				}
 
-			case framing.P_CONTROL_V1:
-				payload, packetID := parseControlV1Payload(pkt)
-				ack := buildAck(c.clientSID, c.serverSID, []uint32{packetID})
-				c.writePacket(rawConn, ack) //nolint:errcheck
-
-				sessionsMu.Lock()
-				sess, ok := sessions[keyID]
-				sessionsMu.Unlock()
-				if !ok {
-					break
-				}
-				payloads, _ := sess.recvWindow.Receive(packetID, payload)
-				for _, p := range payloads {
-					if len(p) > 0 {
-						sess.transport.InjectInbound(p) //nolint:errcheck
+				case framing.P_ACK_V1:
+					if len(pkt) < 11 {
+						break
 					}
-				}
-
-			case framing.P_ACK_V1:
-				if len(pkt) < 11 {
-					break
-				}
-				nAcks := int(pkt[9])
-				off := 10
-				sessionsMu.Lock()
-				sess, ok := sessions[keyID]
-				sessionsMu.Unlock()
-				if !ok {
-					break
-				}
-				for i := 0; i < nAcks && off+4 <= len(pkt); i++ {
-					id := binary.BigEndian.Uint32(pkt[off:])
-					off += 4
-					sess.sendQueue.Ack(id)
+					nAcks := int(pkt[9])
+					off := 10
+					sessionsMu.Lock()
+					sess, ok := sessions[keyID]
+					sessionsMu.Unlock()
+					if !ok {
+						break
+					}
+					for i := 0; i < nAcks && off+4 <= len(pkt); i++ {
+						id := binary.BigEndian.Uint32(pkt[off:])
+						off += 4
+						sess.sendQueue.Ack(id)
+						if id == 0 && sess.resetAcked != nil {
+							select {
+							case <-sess.resetAcked:
+							default:
+								close(sess.resetAcked)
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1895,16 +1980,14 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 //
 // Renegotiation protocol (client-initiated):
 //  1. Allocate the next key_id (cycles 1-7, skipping 0 which is the initial key).
-//  2. Send P_CONTROL_SOFT_RESET_V1 with the new key_id over rawConn.
-//  3. Register a new net.Pipe with the relay goroutine (via rekeyRegCh) so
-//     inbound CONTROL packets with the new key_id are delivered to the pipe.
-//  4. Switch the outbound write key_id (via setWriteKeyIDFn) so subsequent
-//     P_CONTROL_V1 frames carry the new key_id.
-//  5. Perform a new TLS handshake through the pipe.
-//  6. Exchange auth packets (same format as ConnectPhase2 but no username/password
+//  2. Register a new control session with the relay so inbound packets for the
+//     new key_id are accepted before the reset is sent.
+//  3. Exchange and ACK P_CONTROL_SOFT_RESET_V1 packets with the server.
+//  4. Perform a new TLS handshake through the registered transport.
+//  5. Exchange auth packets (same format as ConnectPhase2 but no username/password
 //     field is sent — server expects empty strings on rekey).
-//  7. Export new keying material (same EKM label) and build a new Channel.
-//  8. Call manager.Rotate(newChannel) — the old channel is replaced atomically.
+//  6. Export new keying material (same EKM label) and build a new Channel.
+//  7. Call manager.Rotate(newChannel) — the old channel is replaced atomically.
 //
 // Reference: openvpn3-core ssl/proto.hpp ProtoContext::renegotiate() line ~4108:
 //
@@ -1968,6 +2051,8 @@ func (c *Client) doRekey(ctx context.Context) error {
 		sendQueue:  reliable.NewSendQueue(0),
 		recvWindow: reliable.NewRecvWindow(),
 		registered: make(chan struct{}),
+		peerReset:  make(chan struct{}),
+		resetAcked: make(chan struct{}),
 	}
 
 	// Hand the new session to the inbound relay and wait for it to confirm
@@ -1988,13 +2073,32 @@ func (c *Client) doRekey(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	// Send P_CONTROL_SOFT_RESET_V1 — first packet of the new key epoch.
+	// Send P_CONTROL_SOFT_RESET_V1 — first packet of the new key epoch —
+	// through the reliable queue.  The peer's ACK is part of the reset
+	// handshake and must arrive before either side starts TLS.
 	// Reference: openvpn3-core ssl/proto.hpp KeyContext::start() triggers net_send
 	// with initial_op() = CONTROL_SOFT_RESET_V1 when key_id_ != 0.
 	softReset := buildSoftReset(c.clientSID, keyID)
+	if _, err := rekey.sendQueue.Enqueue(softReset); err != nil {
+		rekey.transport.Close()
+		return fmt.Errorf("queue SOFT_RESET: %w", err)
+	}
 	if err := c.writePacket(rawConn, softReset); err != nil {
 		rekey.transport.Close()
 		return fmt.Errorf("send SOFT_RESET: %w", err)
+	}
+
+	// The control channel is a reliable state machine.  The server will only
+	// begin its TLS handshake after it receives our ACK for its SOFT_RESET, and
+	// the client must not begin before its own SOFT_RESET is ACKed.  Starting
+	// TLS early leaves both peers waiting for the other side until the deadline.
+	deadline := time.Now().Add(30 * time.Second)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	if err := waitForRekeyReset(ctx, rekey, deadline); err != nil {
+		rekey.transport.Close()
+		return err
 	}
 
 	rekeyCapture := &tlsSecretCapture{}
@@ -2005,7 +2109,6 @@ func (c *Client) doRekey(ctx context.Context) error {
 	}
 
 	rekeyTLS := tls.Client(rekey.transport, tlsCfg)
-	deadline := time.Now().Add(30 * time.Second)
 	rekeyTLS.SetDeadline(deadline) //nolint:errcheck
 	if err := rekeyTLS.Handshake(); err != nil {
 		rekeyTLS.Close()
@@ -2077,6 +2180,30 @@ func (c *Client) doRekey(ctx context.Context) error {
 	c.tlsConn = rekeyTLS
 	c.mu.Unlock()
 
+	return nil
+}
+
+// waitForRekeyReset waits for the reliable SOFT_RESET exchange to complete.
+// Both notifications are required: peerReset means we have acknowledged the
+// server's reset, and resetAcked means the server acknowledged ours.
+func waitForRekeyReset(ctx context.Context, sess *controlSession, deadline time.Time) error {
+	peerReset := sess.peerReset
+	resetAcked := sess.resetAcked
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+
+	for peerReset != nil || resetAcked != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("rekey reset exchange: deadline exceeded")
+		case <-peerReset:
+			peerReset = nil
+		case <-resetAcked:
+			resetAcked = nil
+		}
+	}
 	return nil
 }
 
@@ -2351,6 +2478,27 @@ func parseControlV1Payload(pkt []byte) (payload []byte, packetID uint32) {
 	packetID = binary.BigEndian.Uint32(pkt[off:])
 	off += 4
 	return pkt[off:], packetID
+}
+
+// parseControlV1AckIDs returns the reliable packet IDs acknowledged by a
+// P_CONTROL_V1 or P_CONTROL_SOFT_RESET_V1 packet.  Reset packets commonly
+// carry the ACK for the peer's reset inline rather than as P_ACK_V1.
+func parseControlV1AckIDs(pkt []byte) []uint32 {
+	if len(pkt) < 10 {
+		return nil
+	}
+	off := 1 + 8 // opcode + session_id
+	ackLen := int(pkt[off])
+	off++
+	if ackLen == 0 || off+ackLen*4 > len(pkt) {
+		return nil
+	}
+	ackIDs := make([]uint32, 0, ackLen)
+	for i := 0; i < ackLen; i++ {
+		ackIDs = append(ackIDs, binary.BigEndian.Uint32(pkt[off:]))
+		off += 4
+	}
+	return ackIDs
 }
 
 // ---- preread helpers ---------------------------------------------------------
