@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.1.6
+Version:        1.1.7
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,14 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon Jul 27 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.7-1
+- fix(vpn): complete the reliable SOFT_RESET exchange before starting a TLS
+  rekey, preventing repeated 30-second rekey handshake timeouts
+- fix(protocol): advertise only implemented IV_PROTO capabilities; prevents
+  Data Epoch negotiation that leaves affected endpoints connected but unable
+  to pass data
+- gui: use libadwaita theme colors for readable logs in dark mode
+
 * Thu Jul 02 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.6-1
 - fix(routing): add /32 bypass route for VPN server IP before redirect-gateway
   default route — prevents routing loop that dropped connection within 2s
