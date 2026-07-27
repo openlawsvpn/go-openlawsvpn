@@ -8,7 +8,7 @@ Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 ## Status
 
 Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android (via the
-gomobile `.aar`). Released — current tag **v1.1.1** (see `git tag`). The `.aar`
+gomobile `.aar`). Released — current tag **v1.1.7** (see `git tag`). The `.aar`
 build pipeline is in `.github/workflows/aar.yml`; RPMs are built by COPR
 `vorona/openlawsvpn`; Arch Linux packages on AUR as `openlawsvpn`.
 
