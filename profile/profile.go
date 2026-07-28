@@ -1,7 +1,7 @@
 // Package profile parses OpenVPN .ovpn configuration files.
 //
 // It handles the directives that go-openlawsvpn needs: remote, port, proto,
-// inline PEM blocks (<ca>, <cert>, <key>), cipher, auth, reneg-sec, and
+// inline PEM blocks (<ca>, <cert>, <key>), cipher, auth, rekey timing, and
 // common extra options such as comp-lzo / compress.
 package profile
 
@@ -47,11 +47,16 @@ type Profile struct {
 	Auth string
 
 	// RenegSec is the data-channel key renegotiation interval in seconds.
-	// 0 means use the server-pushed value or the default (3600).
+	// An explicit "reneg-sec 0" disables client-initiated renegotiation, as it
+	// does in OpenVPN3. Profiles without the directive use the OpenVPN default
+	// of 3600 seconds.
 	RenegSec int
 	// RenegBytes is the data-channel key renegotiation byte threshold.
 	// 0 means no byte-limit renegotiation.
 	RenegBytes int64
+	// BecomePrimarySec is the optional delay before a negotiated rekey becomes
+	// the primary send key. 0 uses the OpenVPN default derived from reneg-sec.
+	BecomePrimarySec int
 
 	// TunMTU is the MTU for the TUN interface, from the 'tun-mtu' directive.
 	// 0 means use the default (1500).
@@ -109,11 +114,13 @@ func (p *Profile) DetectFlow() AuthFlow {
 // ParseFile parses an .ovpn profile from the provided reader.
 func ParseFile(r io.Reader) (*Profile, error) {
 	p := &Profile{
-		Port:     1194,
-		Proto:    ProtoUDP,
-		Cipher:   "AES-256-GCM",
-		Auth:     "SHA256",
-		RenegSec: 0,
+		Port:   1194,
+		Proto:  ProtoUDP,
+		Cipher: "AES-256-GCM",
+		Auth:   "SHA256",
+		// openvpn3-core ssl/proto.hpp starts with this default, then lets an
+		// explicit reneg-sec directive (including zero) override it.
+		RenegSec: 3600,
 	}
 
 	scanner := bufio.NewScanner(r)
@@ -227,6 +234,15 @@ func ParseFile(r io.Reader) (*Profile, error) {
 				return nil, fmt.Errorf("profile: reneg-bytes: invalid %q", fields[1])
 			}
 			p.RenegBytes = n
+		case "become-primary":
+			if len(fields) < 2 {
+				return nil, fmt.Errorf("profile: become-primary: missing value")
+			}
+			n, err := strconv.Atoi(fields[1])
+			if err != nil || n < 0 {
+				return nil, fmt.Errorf("profile: become-primary: invalid %q", fields[1])
+			}
+			p.BecomePrimarySec = n
 		case "tun-mtu":
 			if len(fields) < 2 {
 				return nil, fmt.Errorf("profile: tun-mtu: missing value")

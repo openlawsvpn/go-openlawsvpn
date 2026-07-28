@@ -183,6 +183,12 @@ type PushOptions struct {
 	// Reference: openvpn3-core client/cliproto.hpp process_inactive() second arg.
 	InactiveBytes int
 
+	// AuthToken is a server-issued credential for subsequent key
+	// renegotiations. It is sensitive and must never be logged.
+	//
+	// Reference: openvpn3-core client/cliproto.hpp extract_auth_token().
+	AuthToken string
+
 	// KeyDerivation is the method used to derive data-channel keys.
 	// Defaults to KeyDerivationTLSEKM (RFC 5705), set to KeyDerivationOpenVPNPRF
 	// when the server does not push "protocol-flags tls-ekm" or "key-derivation tls-ekm".
@@ -468,6 +474,14 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 						opts.InactiveBytes = b
 					}
 				}
+			}
+
+		case "auth-token":
+			// A server-issued auth token replaces the original password on
+			// subsequent renegotiations. Retain it verbatim; it is deliberately
+			// not surfaced in logs or diagnostic output.
+			if len(parts) >= 2 {
+				opts.AuthToken = parts[1]
 			}
 		}
 		// All other directives (dhcp-option, cipher, peer-id, etc.) are ignored.

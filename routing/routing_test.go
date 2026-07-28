@@ -199,6 +199,16 @@ func TestParsePushReply_InactiveTimeoutAndBytes(t *testing.T) {
 	}
 }
 
+func TestParsePushReply_AuthToken(t *testing.T) {
+	opts, err := ParsePushReply("PUSH_REPLY,auth-token server-session-token,cipher AES-256-GCM")
+	if err != nil {
+		t.Fatalf("ParsePushReply: %v", err)
+	}
+	if opts.AuthToken != "server-session-token" {
+		t.Errorf("AuthToken = %q, want server-session-token", opts.AuthToken)
+	}
+}
+
 func TestParsePushReply_Keepalive(t *testing.T) {
 	// AWS Client VPN typical push with ping/ping-restart.
 	msg := "PUSH_REPLY,topology subnet,ifconfig 172.16.77.135 255.255.255.224," +

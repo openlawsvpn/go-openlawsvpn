@@ -10,17 +10,21 @@ import (
 
 // makeGCMPair returns a loopback GCM channel pair (a→b, b→a).
 func makeGCMPair(t *testing.T, seed byte) (a, b *datachannel.Channel) {
+	return makeGCMPairWithKeyID(t, seed, 0)
+}
+
+func makeGCMPairWithKeyID(t *testing.T, seed, keyID byte) (a, b *datachannel.Channel) {
 	t.Helper()
 	keyA := bytes.Repeat([]byte{seed}, 32)
 	ivA := bytes.Repeat([]byte{seed + 1}, 8)
 	keyB := bytes.Repeat([]byte{seed + 2}, 32)
 	ivB := bytes.Repeat([]byte{seed + 3}, 8)
 	var err error
-	a, err = datachannel.New(0, 0, keyA, ivA, keyB, ivB)
+	a, err = datachannel.New(0, keyID, keyA, ivA, keyB, ivB)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err = datachannel.New(0, 0, keyB, ivB, keyA, ivA)
+	b, err = datachannel.New(0, keyID, keyB, ivB, keyA, ivA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,6 +134,55 @@ func TestManagerRotate(t *testing.T) {
 	}
 	if !bytes.Equal(plain, msg) {
 		t.Fatalf("post-rotate roundtrip mismatch")
+	}
+}
+
+func TestManagerRekeyTransitionAcceptsBothEpochs(t *testing.T) {
+	oldClient, oldServer := makeGCMPairWithKeyID(t, 0x51, 0)
+	newClient, newServer := makeGCMPairWithKeyID(t, 0x61, 1)
+	mgr := datachannel.NewManager(oldClient, nil)
+
+	mgr.Prepare(newClient)
+	if mgr.NeedsRekey() {
+		t.Fatal("should not start another rekey while a secondary key is pending")
+	}
+
+	// Before promotion, outgoing data still uses the old primary key.
+	oldPkt, err := mgr.Encrypt([]byte("old-primary"))
+	if err != nil {
+		t.Fatalf("encrypt with old primary: %v", err)
+	}
+	if plain, err := oldServer.Decrypt(oldPkt); err != nil || !bytes.Equal(plain, []byte("old-primary")) {
+		t.Fatalf("old primary packet = %q, %v", plain, err)
+	}
+
+	// The peer may start sending under the new secondary key before promotion.
+	newInbound, err := newServer.Encrypt([]byte("new-secondary"))
+	if err != nil {
+		t.Fatalf("encrypt with new secondary: %v", err)
+	}
+	if plain, err := mgr.Decrypt(newInbound); err != nil || !bytes.Equal(plain, []byte("new-secondary")) {
+		t.Fatalf("new secondary packet = %q, %v", plain, err)
+	}
+
+	if !mgr.Promote(1) {
+		t.Fatal("promote key 1 returned false")
+	}
+	newPkt, err := mgr.Encrypt([]byte("new-primary"))
+	if err != nil {
+		t.Fatalf("encrypt with new primary: %v", err)
+	}
+	if plain, err := newServer.Decrypt(newPkt); err != nil || !bytes.Equal(plain, []byte("new-primary")) {
+		t.Fatalf("new primary packet = %q, %v", plain, err)
+	}
+
+	// In-flight packets from the old key remain valid after promotion.
+	oldInbound, err := oldServer.Encrypt([]byte("old-in-flight"))
+	if err != nil {
+		t.Fatalf("encrypt old in-flight packet: %v", err)
+	}
+	if plain, err := mgr.Decrypt(oldInbound); err != nil || !bytes.Equal(plain, []byte("old-in-flight")) {
+		t.Fatalf("old in-flight packet = %q, %v", plain, err)
 	}
 }
 

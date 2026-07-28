@@ -98,6 +98,19 @@ type controlSession struct {
 	resetAcked chan struct{}
 }
 
+// receiveControl records a reliable control packet and delivers every newly
+// in-order payload to the TLS transport.  Reset packets carry no TLS payload,
+// but must still be recorded: they consume packet ID 0 in a rekey epoch, so
+// the peer's first TLS packet (ID 1) can be delivered.
+func (s *controlSession) receiveControl(packetID uint32, payload []byte) {
+	payloads, _ := s.recvWindow.Receive(packetID, payload)
+	for _, p := range payloads {
+		if len(p) > 0 {
+			_ = s.transport.InjectInbound(p)
+		}
+	}
+}
+
 // state tracks the internal lifecycle of a Client.
 type state int
 
@@ -132,6 +145,12 @@ type Client struct {
 	// sendSeq is the next outbound packet_id for the HARD_RESET / initial sequence.
 	// After tlsHandshake, sequence numbers are owned by each controlSession.
 	sendSeq uint32
+	// writeMu serializes complete OpenVPN frames on rawConn.  TCP framing writes
+	// a two-byte length prefix followed by the payload, and the control, ACK,
+	// retransmit, TUN, and keepalive paths all run in independent goroutines.
+	// Without this lock two frames can be interleaved mid-write, which corrupts
+	// the peer's TCP packet stream (most visibly while a rekey is active).
+	writeMu sync.Mutex
 	// recvExp is the next expected inbound packet_id for the initial session,
 	// used only before tlsHandshake runs. After that, recvWindow in each
 	// controlSession owns receive sequencing.
@@ -751,12 +770,12 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		return fmt.Errorf("vpn: data channel init: %w", err)
 	}
 
-	renegSec := c.prof.RenegSec
-	if renegSec == 0 {
-		renegSec = datachannel.DefaultRenegSec
-	}
 	c.manager = datachannel.NewManager(ch2, &datachannel.ManagerConfig{
-		RenegSec:   renegSec,
+		// An explicit reneg-sec 0 is meaningful: AWS-issued profiles use it to
+		// disable client-initiated rekeys. Do not silently replace it with the
+		// OpenVPN default, or the client will start an unsupported rekey an hour
+		// after connection.
+		RenegSec:   c.prof.RenegSec,
 		RenegBytes: c.prof.RenegBytes,
 		Compress:   pushOpts.Compression,
 	})
@@ -1402,8 +1421,13 @@ func (c *Client) readPacket(conn net.Conn) ([]byte, error) {
 	return framing.ReadTCP(conn)
 }
 
-// writePacket writes one OpenVPN packet to conn using the appropriate framing.
+// writePacket writes one complete OpenVPN packet to conn using the appropriate
+// framing.  A net.Conn permits concurrent calls to Write, but it does not keep
+// the two writes that make up a TCP-framed OpenVPN packet contiguous; serialize
+// them here for every outbound path.
 func (c *Client) writePacket(conn net.Conn, payload []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	if c.prof.Proto == profile.ProtoUDP {
 		return framing.WriteUDP(conn, payload)
 	}
@@ -1599,12 +1623,14 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 					if !ok {
 						break
 					}
-					payloads, _ := sess.recvWindow.Receive(packetID, payload)
-					for _, p := range payloads {
-						if len(p) > 0 {
-							sess.transport.InjectInbound(p) //nolint:errcheck
-						}
-					}
+					// A P_CONTROL_V1 packet can carry ACKs for our reliable
+					// control packets as well as TLS payload.  These are not
+					// merely advisory: OpenVPN only makes the rekeyed key context
+					// ACTIVE after the client's auth packet has been acknowledged.
+					// Ignoring piggybacked ACKs therefore leaves a rekey control
+					// session permanently short of its activation barrier.
+					sess.sendQueue.AckMany(parseControlV1AckIDs(pkt))
+					sess.receiveControl(packetID, payload)
 
 				case framing.P_CONTROL_SOFT_RESET_V1:
 					// A rekey is a reset exchange, not TLS data.  Acknowledge the
@@ -1620,6 +1646,10 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 					if !ok || sess.peerReset == nil {
 						break
 					}
+					// The reset is packet ID 0 in this key epoch.  Advance the
+					// receive window before TLS starts, otherwise the server's first
+					// TLS control packet (ID 1) remains buffered forever.
+					sess.receiveControl(packetID, nil)
 					for _, id := range parseControlV1AckIDs(pkt) {
 						sess.sendQueue.Ack(id)
 						if id == 0 && sess.resetAcked != nil {
@@ -1984,10 +2014,10 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 //     new key_id are accepted before the reset is sent.
 //  3. Exchange and ACK P_CONTROL_SOFT_RESET_V1 packets with the server.
 //  4. Perform a new TLS handshake through the registered transport.
-//  5. Exchange auth packets (same format as ConnectPhase2 but no username/password
-//     field is sent — server expects empty strings on rekey).
+//  5. Exchange auth packets using the active authentication credentials.
 //  6. Export new keying material (same EKM label) and build a new Channel.
-//  7. Call manager.Rotate(newChannel) — the old channel is replaced atomically.
+//  7. Keep the old and new channels active during the promotion window, then
+//     promote the new channel for outgoing packets.
 //
 // Reference: openvpn3-core ssl/proto.hpp ProtoContext::renegotiate() line ~4108:
 //
@@ -2115,18 +2145,32 @@ func (c *Client) doRekey(ctx context.Context) error {
 		return fmt.Errorf("rekey TLS handshake: %w", err)
 	}
 
-	// Auth packet exchange: server expects the same key-method-2 format.
-	// On renegotiation the username/password fields are empty strings.
+	// Auth packet exchange: the server expects the same key-method-2 format.
+	// A renegotiation is a fresh authentication event, so reuse the active SAML
+	// credential (or the server-issued auth-token) rather than sending empty
+	// fields. OpenVPN3's KeyContext::send_auth delegates to client_auth for
+	// every rekey.
 	// Reference: openvpn3-core ssl/proto.hpp KeyContext::generate_datachannel_keys()
 	// is called after the renegotiated TLS session reaches ACTIVE state, which
 	// requires the auth exchange to complete first.
-	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, "N/A", "", c.awsFormat); err != nil {
+	username, password := c.rekeyAuthCredentials()
+	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, username, password, c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey send auth: %w", err)
 	}
 	if err := consumeServerAuthPacket(rekeyTLS, c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey read server auth: %w", err)
+	}
+	// Receiving the server's auth message is only half of the OpenVPN
+	// activation handshake.  The peer must also ACK every reliable control
+	// packet that carried our auth message.  openvpn3-core transitions from
+	// C_WAIT_AUTH_ACK to ACTIVE only when its reliable send queue is empty.
+	// Do the same before exporting data-channel keys; otherwise a server can
+	// install its secondary key while still treating this client as unready.
+	if err := waitForControlAcks(ctx, rekey, deadline); err != nil {
+		rekeyTLS.Close()
+		return err
 	}
 	rekeyTLS.SetDeadline(time.Time{}) //nolint:errcheck
 
@@ -2169,11 +2213,17 @@ func (c *Client) doRekey(ctx context.Context) error {
 		return fmt.Errorf("rekey new channel: %w", err)
 	}
 
-	// Atomically swap the active channel.
-	// Reference: openvpn3-core ssl/proto.hpp ProtoContext::promote_secondary_to_primary()
-	// line ~4634: primary.swap(secondary); primary->rekey(PRIMARY_SECONDARY_SWAP).
-	c.manager.Rotate(newCh)
-	c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey complete (key_id=%d)", keyID)})
+	// OpenVPN keeps the original key as primary while the new key is active as
+	// secondary. The peer can continue sending old-key packets during this
+	// interval. OpenVPN3 promotes a negotiated secondary after its configured
+	// become-primary interval.
+	// Reference: openvpn3-core ssl/proto.hpp process_secondary_event() and
+	// promote_secondary_to_primary().
+	manager := c.manager
+	promotionDelay := c.rekeyPromotionDelay()
+	manager.Prepare(newCh)
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey ready (key_id=%d, promotion in %s)", keyID, promotionDelay)})
+	c.scheduleRekeyPromotion(ctx, manager, keyID, promotionDelay)
 
 	// Update the stored TLS connection for future EKM exports (if needed).
 	c.mu.Lock()
@@ -2181,6 +2231,63 @@ func (c *Client) doRekey(ctx context.Context) error {
 	c.mu.Unlock()
 
 	return nil
+}
+
+// rekeyAuthCredentials returns the credentials that must be sent in the
+// key-method-2 authentication message for a new key epoch. OpenVPN
+// re-authenticates every rekey; an empty password is only correct for a
+// certificate/autologin profile with no password-based authentication.
+//
+// AWS Client VPN accepts the original CRV1 SAML assertion for the lifetime of
+// the connection. If the endpoint supplied an auth-token in PUSH_REPLY, that
+// replaces the CRV1 password exactly as it does in openvpn3-core.
+func (c *Client) rekeyAuthCredentials() (username, password string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.pushOpts != nil && c.pushOpts.AuthToken != "" {
+		return "N/A", c.pushOpts.AuthToken
+	}
+	if c.cachedStateID != "" && c.cachedSAMLToken != "" {
+		return "N/A", "CRV1::" + c.cachedStateID + "::" + c.cachedSAMLToken
+	}
+	return "", ""
+}
+
+// rekeyPromotionDelay matches OpenVPN3's default become-primary calculation:
+// min(hand-window (60 seconds), reneg-sec / 2). An explicit
+// become-primary directive overrides that calculation.
+func (c *Client) rekeyPromotionDelay() time.Duration {
+	if c.prof.BecomePrimarySec > 0 {
+		return time.Duration(c.prof.BecomePrimarySec) * time.Second
+	}
+	renegSec := c.prof.RenegSec
+	if renegSec == 0 {
+		renegSec = datachannel.DefaultRenegSec
+	}
+	delaySec := renegSec / 2
+	if delaySec > 60 {
+		delaySec = 60
+	}
+	return time.Duration(delaySec) * time.Second
+}
+
+// scheduleRekeyPromotion promotes the prepared data-channel key after its
+// configured transition interval. The connection context cancels this timer
+// on teardown.
+func (c *Client) scheduleRekeyPromotion(ctx context.Context, manager *datachannel.Manager, keyID uint8, delay time.Duration) {
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			if manager.Promote(keyID) {
+				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey complete (key_id=%d)", keyID)})
+			}
+		}
+	}()
 }
 
 // waitForRekeyReset waits for the reliable SOFT_RESET exchange to complete.
@@ -2209,6 +2316,34 @@ func waitForRekeyReset(ctx context.Context, sess *controlSession, deadline time.
 		}
 	}
 	return nil
+}
+
+// waitForControlAcks waits until the peer has ACKed every reliably sent
+// control packet in sess.  In particular, this covers the key-method-2 auth
+// packet sent after a rekey TLS handshake.  ACKs can be standalone P_ACK_V1
+// packets or piggybacked on P_CONTROL_V1 packets.
+func waitForControlAcks(ctx context.Context, sess *controlSession, deadline time.Time) error {
+	if sess.sendQueue.Len() == 0 {
+		return nil
+	}
+
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return fmt.Errorf("rekey auth acknowledgement: deadline exceeded (%d control packets unacknowledged)", sess.sendQueue.Len())
+		case <-ticker.C:
+			if sess.sendQueue.Len() == 0 {
+				return nil
+			}
+		}
+	}
 }
 
 // sessionMonitor watches for mid-session AUTH_FAILED messages from the server.

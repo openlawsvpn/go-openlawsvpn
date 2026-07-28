@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.1.8
+Version:        1.1.9
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,11 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Tue Jul 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.9-1
+- fix(vpn): harden data-channel rekey control sequencing, authentication, and
+  key transition handling
+- fix(vpn): honor explicit reneg-sec 0 in AWS profiles
+
 * Tue Jul 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.8-1
 - fix(vpn): preserve the rekey control-session key ID in P_ACK_V1 packets;
   allows the server to complete the SOFT_RESET exchange and begin TLS renewal

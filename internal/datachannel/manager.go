@@ -10,8 +10,9 @@
 //  1. Caller detects the limit via NeedsRekey.
 //  2. Caller sends P_CONTROL_SOFT_RESET_V1 over the control channel.
 //  3. A new TLS session completes and new KeyMaterial is derived.
-//  4. Caller calls Rotate with a new *Channel built from the new keys.
-//     The old Channel is retained until the peer confirms the new keys.
+//  4. Caller calls Prepare with a new *Channel built from the new keys.
+//     Both key epochs remain valid during the promotion window.
+//  5. Caller promotes the new key once the peer has had time to activate it.
 //
 // This package only tracks the *when* of renegotiation; the actual TLS
 // renegotiation is handled by the caller (the ctls / reliable layer).
@@ -20,11 +21,13 @@
 package datachannel
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 )
 
 // DefaultRenegSec is the default key renegotiation interval (3600 s = 1 hour).
@@ -38,14 +41,16 @@ const DefaultRenegBytes = 0
 // Manager wraps a Channel and tracks the byte and time limits that trigger
 // key renegotiation.  It is safe for concurrent use.
 type Manager struct {
-	mu      sync.RWMutex
-	current *Channel
+	mu        sync.RWMutex
+	current   *Channel // primary: used for outgoing packets
+	secondary *Channel // newly negotiated key, accepted before promotion
+	previous  *Channel // prior primary, accepted after promotion
 
-	renegSec   int           // renegotiation interval in seconds (0 = disabled)
-	renegBytes int64         // byte threshold (0 = disabled)
-	startedAt  time.Time     // time the current key epoch started
-	bytesSent  atomic.Int64  // bytes encrypted since last rotation
-	bytesRecv  atomic.Int64  // bytes decrypted since last rotation
+	renegSec   int          // renegotiation interval in seconds (0 = disabled)
+	renegBytes int64        // byte threshold (0 = disabled)
+	startedAt  time.Time    // time the current key epoch started
+	bytesSent  atomic.Int64 // bytes encrypted since last rotation
+	bytesRecv  atomic.Int64 // bytes decrypted since last rotation
 
 	// compress is the compression mode negotiated with the server.
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_compression() line ~875.
@@ -120,9 +125,12 @@ func (m *Manager) Encrypt(plaintext []byte) ([]byte, error) {
 // calls comp_ctx.decompress(buf) which for stub modes strips the first byte.
 func (m *Manager) Decrypt(pkt []byte) ([]byte, error) {
 	m.mu.RLock()
-	ch := m.current
+	ch, err := m.decryptChannel(pkt)
 	cmode := m.compress
 	m.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
 
 	inner, err := ch.Decrypt(pkt)
 	if err != nil {
@@ -136,30 +144,93 @@ func (m *Manager) Decrypt(pkt []byte) ([]byte, error) {
 	return plain, nil
 }
 
+// decryptChannel selects the data-channel key epoch from the packet's key ID.
+// During a rekey, OpenVPN keeps the old and newly negotiated keys valid at the
+// same time, so packets can arrive under either ID.
+//
+// m.mu must be held by the caller.
+func (m *Manager) decryptChannel(pkt []byte) (*Channel, error) {
+	if len(pkt) == 0 || framing.OpcodeFromByte(pkt[0]) != framing.P_DATA_V2 {
+		return nil, fmt.Errorf("datachannel: expected P_DATA_V2 packet")
+	}
+
+	keyID := framing.KeyIDFromByte(pkt[0])
+	for _, ch := range []*Channel{m.current, m.secondary, m.previous} {
+		if ch != nil && ch.keyID == keyID {
+			return ch, nil
+		}
+	}
+	return nil, fmt.Errorf("datachannel: unknown key_id %d", keyID)
+}
+
 // NeedsRekey reports whether the current key epoch has exceeded the configured
 // time or byte limits and a renegotiation should be initiated.
 func (m *Manager) NeedsRekey() bool {
-	if m.renegSec > 0 {
-		if time.Since(m.startedAt) >= time.Duration(m.renegSec)*time.Second {
+	m.mu.RLock()
+	pending := m.secondary != nil
+	startedAt := m.startedAt
+	renegSec := m.renegSec
+	renegBytes := m.renegBytes
+	m.mu.RUnlock()
+
+	// A secondary key is already being negotiated or is awaiting promotion.
+	// Starting another rekey would replace it before the peer can switch.
+	if pending {
+		return false
+	}
+	if renegSec > 0 {
+		if time.Since(startedAt) >= time.Duration(renegSec)*time.Second {
 			return true
 		}
 	}
-	if m.renegBytes > 0 {
+	if renegBytes > 0 {
 		total := m.bytesSent.Load() + m.bytesRecv.Load()
-		if total >= m.renegBytes {
+		if total >= renegBytes {
 			return true
 		}
 	}
 	return false
 }
 
-// Rotate atomically replaces the active Channel with next and resets the
-// renegotiation counters.  The old Channel is discarded; the caller must
-// ensure that no in-flight packets for the old epoch are delivered after Rotate.
+// Prepare installs next as a secondary key while retaining current as the
+// primary send key. Both key IDs are accepted for decryption until Promote.
+// It also starts the next renegotiation interval and clears its byte counters.
+func (m *Manager) Prepare(next *Channel) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.secondary = next
+	// OpenVPN maintains only a primary and one secondary context. A stale key
+	// from the prior transition must not survive into a new transition.
+	m.previous = nil
+	m.startedAt = time.Now()
+	m.bytesSent.Store(0)
+	m.bytesRecv.Store(0)
+}
+
+// Promote makes the prepared keyID the primary send key. The old primary is
+// retained for decryption, because the peer may still have in-flight packets
+// from the old epoch. It returns false when the requested key is no longer
+// the prepared secondary (for example, after disconnect).
+func (m *Manager) Promote(keyID uint8) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.secondary == nil || m.secondary.keyID != keyID&0x07 {
+		return false
+	}
+	m.previous = m.current
+	m.current = m.secondary
+	m.secondary = nil
+	return true
+}
+
+// Rotate atomically replaces the active Channel and discards every other key.
+// It is retained for callers that require an immediate, single-key rotation.
 func (m *Manager) Rotate(next *Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.current = next
+	m.secondary = nil
+	m.previous = nil
 	m.startedAt = time.Now()
 	m.bytesSent.Store(0)
 	m.bytesRecv.Store(0)

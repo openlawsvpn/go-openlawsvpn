@@ -66,6 +66,26 @@ func TestParseMinimal(t *testing.T) {
 	}
 }
 
+func TestParseRenegSecZeroDisablesClientRekey(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.test 443\nreneg-sec 0\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.RenegSec != 0 {
+		t.Fatalf("RenegSec = %d, want 0", p.RenegSec)
+	}
+}
+
+func TestParseWithoutRenegSecUsesOpenVPNDefault(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.test 443\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.RenegSec != 3600 {
+		t.Fatalf("RenegSec = %d, want 3600", p.RenegSec)
+	}
+}
+
 func TestParseDefaults(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.com\n")
 	if err != nil {
@@ -135,6 +155,16 @@ func TestParseRenegBytes(t *testing.T) {
 	}
 	if p.RenegBytes != 10485760 {
 		t.Errorf("RenegBytes = %d, want 10485760", p.RenegBytes)
+	}
+}
+
+func TestParseBecomePrimary(t *testing.T) {
+	p, err := profile.ParseString("remote h 443\nbecome-primary 5\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.BecomePrimarySec != 5 {
+		t.Errorf("BecomePrimarySec = %d, want 5", p.BecomePrimarySec)
 	}
 }
 
