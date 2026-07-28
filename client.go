@@ -403,7 +403,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	// the first outbound P_CONTROL_V1 must use packet_id=1.
 	{
 		_, srvPacketID := parseControlV1Payload(srvReset)
-		ack := buildAck(c.clientSID, c.serverSID, []uint32{srvPacketID})
+		ack := buildAck(c.clientSID, c.serverSID, 0, []uint32{srvPacketID})
 		if err := c.writePacket(rawConn, ack); err != nil {
 			rawConn.Close()
 			c.setDisconnected(err)
@@ -602,7 +602,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		}
 		copy(c.serverSID[:], srvReset2[1:9])
 		_, srvPacketID2 := parseControlV1Payload(srvReset2)
-		ack2 := buildAck(c.clientSID, c.serverSID, []uint32{srvPacketID2})
+		ack2 := buildAck(c.clientSID, c.serverSID, 0, []uint32{srvPacketID2})
 		if err := c.writePacket(rawConn2, ack2); err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
@@ -1590,7 +1590,7 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 
 				case framing.P_CONTROL_V1:
 					payload, packetID := parseControlV1Payload(pkt)
-					ack := buildAck(c.clientSID, c.serverSID, []uint32{packetID})
+					ack := buildAck(c.clientSID, c.serverSID, keyID, []uint32{packetID})
 					c.writePacket(rawConn, ack) //nolint:errcheck
 
 					sessionsMu.Lock()
@@ -1611,7 +1611,7 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 					// peer's reset and record it so doRekey can start TLS only after
 					// both sides have completed the reliable reset handshake.
 					_, packetID := parseControlV1Payload(pkt)
-					ack := buildAck(c.clientSID, c.serverSID, []uint32{packetID})
+					ack := buildAck(c.clientSID, c.serverSID, keyID, []uint32{packetID})
 					c.writePacket(rawConn, ack) //nolint:errcheck
 
 					sessionsMu.Lock()
@@ -2189,6 +2189,8 @@ func (c *Client) doRekey(ctx context.Context) error {
 func waitForRekeyReset(ctx context.Context, sess *controlSession, deadline time.Time) error {
 	peerReset := sess.peerReset
 	resetAcked := sess.resetAcked
+	gotPeerReset := false
+	gotResetAck := false
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
 
@@ -2197,11 +2199,13 @@ func waitForRekeyReset(ctx context.Context, sess *controlSession, deadline time.
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-timer.C:
-			return fmt.Errorf("rekey reset exchange: deadline exceeded")
+			return fmt.Errorf("rekey reset exchange: deadline exceeded (peer reset received=%t, local reset acknowledged=%t)", gotPeerReset, gotResetAck)
 		case <-peerReset:
 			peerReset = nil
+			gotPeerReset = true
 		case <-resetAcked:
 			resetAcked = nil
+			gotResetAck = true
 		}
 	}
 	return nil
@@ -2448,9 +2452,10 @@ func buildSoftReset(clientSID [8]byte, keyID uint8) []byte {
 	return b
 }
 
-// buildAck builds a P_ACK_V1 packet.
-func buildAck(senderSID, remoteSID [8]byte, ackIDs []uint32) []byte {
-	b := []byte{byte(framing.P_ACK_V1 << 3)}
+// buildAck builds a P_ACK_V1 packet for keyID. ACKs are part of the control
+// session and must carry the same key ID as the packet they acknowledge.
+func buildAck(senderSID, remoteSID [8]byte, keyID uint8, ackIDs []uint32) []byte {
+	b := []byte{framing.FirstByte(framing.P_ACK_V1, keyID)}
 	b = append(b, senderSID[:]...)
 	b = append(b, byte(len(ackIDs)))
 	for _, id := range ackIDs {

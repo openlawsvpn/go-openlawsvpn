@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
 )
 
 func TestWaitForRekeyResetRequiresPeerResetAndAck(t *testing.T) {
@@ -40,8 +42,8 @@ func TestWaitForRekeyResetDeadline(t *testing.T) {
 		resetAcked: make(chan struct{}),
 	}
 	err := waitForRekeyReset(context.Background(), sess, time.Now().Add(5*time.Millisecond))
-	if err == nil || err.Error() != "rekey reset exchange: deadline exceeded" {
-		t.Fatalf("waitForRekeyReset error = %v, want reset-exchange deadline", err)
+	if err == nil || err.Error() != "rekey reset exchange: deadline exceeded (peer reset received=false, local reset acknowledged=false)" {
+		t.Fatalf("waitForRekeyReset error = %v, want detailed reset-exchange deadline", err)
 	}
 }
 
@@ -51,5 +53,16 @@ func TestParseControlV1AckIDs(t *testing.T) {
 	got := parseControlV1AckIDs(pkt)
 	if len(got) != 2 || got[0] != 0 || got[1] != 4 {
 		t.Fatalf("parseControlV1AckIDs = %v, want [0 4]", got)
+	}
+}
+
+func TestBuildAckUsesControlSessionKeyID(t *testing.T) {
+	var sender, remote [8]byte
+	pkt := buildAck(sender, remote, 6, []uint32{0})
+	if got := framing.KeyIDFromByte(pkt[0]); got != 6 {
+		t.Fatalf("ACK key ID = %d, want 6", got)
+	}
+	if got := framing.OpcodeFromByte(pkt[0]); got != framing.P_ACK_V1 {
+		t.Fatalf("ACK opcode = %d, want P_ACK_V1", got)
 	}
 }
