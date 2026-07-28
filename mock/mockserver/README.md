@@ -37,7 +37,7 @@ MOCK_CRV1=1 go run ./mock/mockserver
 | `MOCK_TCP_PORT` | `4433` | TCP listen port |
 | `MOCK_UDP_PORT` | `1194` | UDP listen port |
 | `CERT_DIR` | `""` | Directory with `ca.crt`, `server.crt`, `server.key`. When empty, ephemeral in-memory certs are generated and the CA PEM is printed to stderr |
-| `IDP_URL` | `https://openlawsvpn.com/demo/login.html` | Base URL for the CRV1 login page. `?state=<id>` is appended |
+| `IDP_URL` | `https://openlawsvpn.com/demo/login/` | Base URL for the CRV1 login page. `?state=<id>` is appended |
 | `DEMO_TOKEN` | `DEMO2026OPENLAWS` | Fixed token the login page must POST to `127.0.0.1:35001`. Phase 2 rejects anything else |
 
 ## Demo VPN server (no AWS required)
@@ -53,7 +53,7 @@ Reviewer imports demo-client.ovpn  (CA cert only, no private key)
          ↓
 App connects → mockserver sends CRV1 challenge with login page URL
          ↓
-Custom Tab opens https://openlawsvpn.com/demo/login.html?state=<id>
+Custom Tab opens https://openlawsvpn.com/demo/login/?state=<id>
          ↓
 Reviewer enters  username: reviewer  /  password: Demo2026!
          ↓
@@ -62,7 +62,7 @@ Page POSTs SAMLResponse=DEMO2026OPENLAWS to http://127.0.0.1:35001
 App captures token, sends Phase 2 → mockserver validates → PUSH_REPLY → tunnel up
 ```
 
-The login page (`openlawsvpn-website/demo/login.html`) is **pure static HTML** —
+The login page (`openlawsvpn-website/demo/login/index.html`) is **pure static HTML** —
 no server, no Lambda, no database. Credentials are validated client-side and the
 fixed token is hardcoded in both the page and the server.
 
