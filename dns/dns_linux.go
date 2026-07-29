@@ -26,8 +26,10 @@ func ifIndex(ifName string) (int32, error) {
 
 // ApplyResolved configures DNS via systemd-resolved over D-Bus (no polkit).
 //
-// It calls org.freedesktop.resolve1.Manager.SetLinkDNS and SetLinkDomains,
-// scoping the servers to the TUN interface ifName.
+// It calls org.freedesktop.resolve1.Manager.SetLinkDNS, SetLinkDomains and
+// SetLinkDefaultRoute, scoping the pushed servers to the TUN interface ifName
+// and routing ALL DNS queries to them (matching the AWS Client VPN client,
+// which installs the pushed servers as the machine's global resolvers).
 func ApplyResolved(cfg *Config, ifName string) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil
@@ -63,19 +65,40 @@ func ApplyResolved(cfg *Config, ifName string) error {
 		return fmt.Errorf("dns: SetLinkDNS: %w", err)
 	}
 
-	if len(cfg.SearchDomains) > 0 {
-		type domainEntry struct {
-			Domain     string
-			SearchOnly bool
-		}
-		var domains []domainEntry
-		for _, d := range cfg.SearchDomains {
-			domains = append(domains, domainEntry{Domain: d, SearchOnly: false})
-		}
-		if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
-			return fmt.Errorf("dns: SetLinkDomains: %w", err)
-		}
+	// Route ALL DNS queries to the VPN-pushed servers.
+	//
+	// systemd-resolved (the default resolver on Fedora) will not consult a
+	// link's DNS servers unless a domain is associated with the link or the link
+	// is the default DNS route. AWS Client VPN pushes DNS servers but never a
+	// domain, so without this the pushed resolver sits unused and internal names
+	// (private hosted zones, VPC interface endpoints) fail to resolve. The "~."
+	// route-only wildcard makes tun0 the default DNS route, so every query goes
+	// to the pushed servers — the same effect as the AWS client, which installs
+	// them as the machine's global resolv.conf nameservers.
+	//
+	// The bool is resolved's route_only flag: true = routing domain (~domain),
+	// used only to pick which link answers a query, never appended as a search
+	// suffix. "." must be route-only; any pushed search domains are added as real
+	// search domains (route_only=false) so single-label lookups still work.
+	type domainEntry struct {
+		Domain    string
+		RouteOnly bool
 	}
+	domains := []domainEntry{{Domain: ".", RouteOnly: true}}
+	for _, d := range cfg.SearchDomains {
+		domains = append(domains, domainEntry{Domain: d, RouteOnly: false})
+	}
+	if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
+		return fmt.Errorf("dns: SetLinkDomains: %w", err)
+	}
+
+	// Explicitly flag tun0 as the default DNS route. The "~." domain above
+	// already achieves this on every systemd version we support; this is
+	// belt-and-suspenders and is treated as non-fatal if unsupported.
+	if err := obj.Call(resolvedIface+".SetLinkDefaultRoute", 0, idx, true).Err; err != nil {
+		fmt.Fprintf(os.Stderr, "dns: SetLinkDefaultRoute (non-fatal): %v\n", err)
+	}
+
 	return nil
 }
 
