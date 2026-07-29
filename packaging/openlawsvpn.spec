@@ -199,6 +199,7 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 %changelog
 * Wed Jul 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.0-1
 - feat(dns): support full and split DNS from pushed or profile options
+- fix(ios): configure full and split DNS for VPC-private resources
 - fix(gui): update the profile list immediately after deletion
 
 * Tue Jul 28 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.1.9-1

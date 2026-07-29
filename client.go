@@ -2480,6 +2480,8 @@ func parsePeerID(pushRaw string) uint32 {
 //	  "gateway": "172.16.0.1",
 //	  "mtu":     1500,
 //	  "dns":     ["10.0.0.2"],
+//	  "search_domains": ["corp.example"],
+//	  "route_domains": ["internal.example"],
 //	  "routes":  [{"network":"10.0.0.0","mask":"255.255.0.0"}],
 //	  "redirect_gateway": false
 //	}
@@ -2526,6 +2528,9 @@ func buildIfconfigJSON(push *routing.PushOptions, dnsOpts *dns.Config, mtu int) 
 		}
 		if len(dnsOpts.SearchDomains) > 0 {
 			m["search_domains"] = dnsOpts.SearchDomains
+		}
+		if len(dnsOpts.RouteDomains) > 0 {
+			m["route_domains"] = dnsOpts.RouteDomains
 		}
 	}
 	b, _ := json.Marshal(m)
