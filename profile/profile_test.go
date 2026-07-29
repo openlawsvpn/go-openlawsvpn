@@ -102,6 +102,28 @@ func TestParseDefaults(t *testing.T) {
 	}
 }
 
+func TestParseStaticDNSOptions(t *testing.T) {
+	p, err := profile.ParseString(`
+remote vpn.example.test
+dhcp-option DNS 10.130.0.2
+dhcp-option DOMAIN corp.example.test
+dhcp-option DOMAIN-ROUTE internal.company.com
+dhcp-option DOMAIN-ROUTE us-east-2.eks.amazonaws.com
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(p.DNSServers), 1; got != want || p.DNSServers[0].String() != "10.130.0.2" {
+		t.Errorf("DNS servers = %v, want [10.130.0.2]", p.DNSServers)
+	}
+	if got, want := p.DNSSearchDomains, []string{"corp.example.test"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("search domains = %v, want %v", got, want)
+	}
+	if got, want := p.DNSRouteDomains, []string{"internal.company.com", "us-east-2.eks.amazonaws.com"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("route domains = %v, want %v", got, want)
+	}
+}
+
 func TestParseMissingRemote(t *testing.T) {
 	_, err := profile.ParseString("cipher AES-256-GCM\n")
 	if err == nil {

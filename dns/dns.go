@@ -20,20 +20,24 @@ import (
 	"strings"
 )
 
-// Config holds the DNS servers and search domains pushed by the server.
+// Config holds DNS settings supplied by the server or client profile.
 type Config struct {
 	// Servers is the list of DNS server addresses, in preference order.
 	Servers []net.IP
 	// SearchDomains is the list of DNS search domains.
 	// May be empty.
 	SearchDomains []string
+	// RouteDomains is the list of DNS suffixes that must be resolved through
+	// Servers. They correspond to OpenVPN's dhcp-option DOMAIN-ROUTE.
+	// May be empty; on systemd-resolved, an empty list selects full DNS mode.
+	RouteDomains []string
 }
 
 // ParsePushReply extracts DNS options from a PUSH_REPLY control message.
 //
-// The message may contain any number of "dhcp-option DNS <ip>" and
-// "dhcp-option DOMAIN <domain>" directives.  All other directives are
-// silently ignored.
+// The message may contain any number of "dhcp-option DNS <ip>",
+// "dhcp-option DOMAIN <domain>", and "dhcp-option DOMAIN-ROUTE <domain>"
+// directives. All other directives are silently ignored.
 func ParsePushReply(msg string) (*Config, error) {
 	msg = strings.TrimPrefix(msg, "PUSH_REPLY,")
 	msg = strings.TrimRight(msg, "\x00")
@@ -58,13 +62,60 @@ func ParsePushReply(msg string) (*Config, error) {
 			if ip == nil {
 				return nil, fmt.Errorf("dns: dhcp-option DNS: invalid IP %q", parts[2])
 			}
-			cfg.Servers = append(cfg.Servers, ip.To4())
+			cfg.Servers = append(cfg.Servers, ip)
 		case "DOMAIN":
 			cfg.SearchDomains = append(cfg.SearchDomains, parts[2])
+		case "DOMAIN-ROUTE":
+			cfg.RouteDomains = append(cfg.RouteDomains, parts[2])
 		}
 	}
 
 	return cfg, nil
+}
+
+// Merge returns a DNS configuration containing every non-duplicate setting
+// from configs, in argument order. Server-pushed options should normally be
+// passed before static profile options so their DNS server preference wins.
+func Merge(configs ...*Config) *Config {
+	merged := &Config{}
+	servers := make(map[string]struct{})
+	searchDomains := make(map[string]struct{})
+	routeDomains := make(map[string]struct{})
+
+	for _, cfg := range configs {
+		if cfg == nil {
+			continue
+		}
+		for _, server := range cfg.Servers {
+			if server == nil {
+				continue
+			}
+			key := server.String()
+			if _, found := servers[key]; found {
+				continue
+			}
+			servers[key] = struct{}{}
+			merged.Servers = append(merged.Servers, server)
+		}
+		for _, domain := range cfg.SearchDomains {
+			key := strings.ToLower(domain)
+			if _, found := searchDomains[key]; found {
+				continue
+			}
+			searchDomains[key] = struct{}{}
+			merged.SearchDomains = append(merged.SearchDomains, domain)
+		}
+		for _, domain := range cfg.RouteDomains {
+			key := strings.ToLower(domain)
+			if _, found := routeDomains[key]; found {
+				continue
+			}
+			routeDomains[key] = struct{}{}
+			merged.RouteDomains = append(merged.RouteDomains, domain)
+		}
+	}
+
+	return merged
 }
 
 // ResolvConfPath is the path written by ApplyResolvConf.

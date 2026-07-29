@@ -16,6 +16,34 @@ const resolvedDest = "org.freedesktop.resolve1"
 const resolvedPath = dbus.ObjectPath("/org/freedesktop/resolve1")
 const resolvedIface = "org.freedesktop.resolve1.Manager"
 
+// resolvedDomainEntry is the (string domain, bool route_only) tuple expected
+// by org.freedesktop.resolve1.Manager.SetLinkDomains.
+type resolvedDomainEntry struct {
+	Domain    string
+	RouteOnly bool
+}
+
+func resolvedLinkDomains(cfg *Config) []resolvedDomainEntry {
+	var domains []resolvedDomainEntry
+	if len(cfg.RouteDomains) == 0 {
+		// A route-only root domain, represented as {".", true} on the D-Bus
+		// API, matches every multi-label DNS name. This prevents
+		// systemd-resolved from treating all default DNS links (for example the
+		// Wi-Fi resolver) as equal candidates.
+		domains = append(domains, resolvedDomainEntry{Domain: ".", RouteOnly: true})
+	} else {
+		// Explicit DOMAIN-ROUTE values select split DNS. A route-only domain is
+		// used for routing but is never appended to single-label lookups.
+		for _, d := range cfg.RouteDomains {
+			domains = append(domains, resolvedDomainEntry{Domain: d, RouteOnly: true})
+		}
+	}
+	for _, d := range cfg.SearchDomains {
+		domains = append(domains, resolvedDomainEntry{Domain: d, RouteOnly: false})
+	}
+	return domains
+}
+
 func ifIndex(ifName string) (int32, error) {
 	iface, err := net.InterfaceByName(ifName)
 	if err != nil {
@@ -27,7 +55,9 @@ func ifIndex(ifName string) (int32, error) {
 // ApplyResolved configures DNS via systemd-resolved over D-Bus (no polkit).
 //
 // It calls org.freedesktop.resolve1.Manager.SetLinkDNS and SetLinkDomains,
-// scoping the servers to the TUN interface ifName.
+// scoping the servers to the TUN interface ifName. Without explicit
+// DOMAIN-ROUTE values, a route-only root domain (~.) makes the VPN resolver
+// preferred for all multi-label queries. Explicit routes select split DNS.
 func ApplyResolved(cfg *Config, ifName string) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil
@@ -63,18 +93,12 @@ func ApplyResolved(cfg *Config, ifName string) error {
 		return fmt.Errorf("dns: SetLinkDNS: %w", err)
 	}
 
-	if len(cfg.SearchDomains) > 0 {
-		type domainEntry struct {
-			Domain     string
-			SearchOnly bool
-		}
-		var domains []domainEntry
-		for _, d := range cfg.SearchDomains {
-			domains = append(domains, domainEntry{Domain: d, SearchOnly: false})
-		}
-		if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
-			return fmt.Errorf("dns: SetLinkDomains: %w", err)
-		}
+	domains := resolvedLinkDomains(cfg)
+	if err := obj.Call(resolvedIface+".SetLinkDomains", 0, idx, domains).Err; err != nil {
+		// SetLinkDNS has already changed resolved state. Undo it before letting
+		// Apply fall back to resolv.conf, so the two backends cannot conflict.
+		_ = obj.Call(resolvedIface+".RevertLink", 0, idx).Err
+		return fmt.Errorf("dns: SetLinkDomains: %w", err)
 	}
 	return nil
 }

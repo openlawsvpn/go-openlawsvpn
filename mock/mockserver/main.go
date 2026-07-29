@@ -15,7 +15,7 @@
 //	MOCK_UDP_PORT            — UDP listen port (default 1194)
 //	CERT_DIR                 — directory containing ca.crt server.crt server.key
 //	                           when unset, self-signed certs are generated in memory
-//	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login.html)
+//	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login/)
 //	DEMO_TOKEN               — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
 package main
 
@@ -478,7 +478,7 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		stateID := strconv.FormatInt(time.Now().UnixNano(), 16)
 		idpBase := os.Getenv("IDP_URL")
 		if idpBase == "" {
-			idpBase = "https://openlawsvpn.com/demo/login.html"
+			idpBase = "https://openlawsvpn.com/demo/login/"
 		}
 		samlURL := idpBase + "?state=" + stateID
 		challenge := "AUTH_FAILED,CRV1:R:" + stateID + "::" + samlURL + "\x00"
