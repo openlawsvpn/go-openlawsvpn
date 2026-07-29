@@ -445,7 +445,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	// Send OpenVPN auth packet over TLS.
 	// Per openvpn3-core cliproto.hpp: client sends auth, then reads server auth,
 	// then waits for ACTIVE state (auth ACKs exchanged), THEN sends PUSH_REQUEST.
-	if err := sendAuthPacket(tlsConn, c.prof.Proto, "N/A", "ACS::35001", c.awsFormat); err != nil {
+	if err := sendAuthPacket(tlsConn, c.prof.Proto, c.prof.TunMTU, "N/A", "ACS::35001", c.awsFormat); err != nil {
 		rawConn.Close()
 		c.setDisconnected(err)
 		return nil, fmt.Errorf("vpn: send auth packet: %w", err)
@@ -644,7 +644,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.tlsRW = tlsConn2
 
 		// Per openvpn3-core cliproto.hpp: auth → server auth → PUSH_REQUEST.
-		if err := sendAuthPacket(tlsConn2, c.prof.Proto, "N/A", crv1Password, c.awsFormat); err != nil {
+		if err := sendAuthPacket(tlsConn2, c.prof.Proto, c.prof.TunMTU, "N/A", crv1Password, c.awsFormat); err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
 			return fmt.Errorf("vpn: Phase2 send auth: %w", err)
@@ -792,7 +792,9 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.mssFix = c.prof.MSSFix
 	}
 
-	// Parse tun-mtu from PUSH_REPLY (overrides profile setting).
+	// A server-pushed MTU can reduce the local MTU, but an explicit profile
+	// value remains an upper bound. This prevents a larger PUSH_REPLY value
+	// from undoing a user-selected MTU that avoids path fragmentation.
 	tunMTU := parseTunMTU(pushRaw, c.prof.TunMTU)
 
 	// Stand up the TUN interface.
@@ -1185,22 +1187,25 @@ func (c *Client) LocalIP() string {
 // packet. The string is dynamic because proto and link-mtu differ between TCP
 // and UDP connections — advertising the wrong proto causes AUTH_FAILED.
 //
-// Values match what openvpn3-core 3.11.6 sends for each transport:
-//   - UDP: proto UDPv4,        link-mtu 1521, cipher AES-256-GCM, auth [null-digest], keysize 256
-//   - TCP: proto TCPv4_CLIENT, link-mtu 1543, cipher AES-256-GCM, auth [null-digest], keysize 256
+// Values match what openvpn3-core 3.11.6 sends for each transport at a
+// 1500-byte TUN MTU. link-mtu tracks a configured TUN MTU by retaining the
+// same transport overhead: 21 bytes for UDP and 43 bytes for TCP.
 //
 // The cipher/auth/keysize here are the NCP-negotiated values; openvpn3-core
 // always advertises AES-256-GCM in the tunnel options string when IV_NCP=2.
-func buildTunnelOptions(proto profile.Proto) string {
+func buildTunnelOptions(proto profile.Proto, tunMTU int) string {
+	if tunMTU == 0 {
+		tunMTU = 1500
+	}
 	protoStr := "UDPv4"
-	linkMTU := 1521
+	linkMTU := tunMTU + 21
 	if proto == profile.ProtoTCP {
 		protoStr = "TCPv4_CLIENT"
-		linkMTU = 1543
+		linkMTU = tunMTU + 43
 	}
 	return fmt.Sprintf(
-		"V4,dev-type tun,link-mtu %d,tun-mtu 1500,proto %s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-client",
-		linkMTU, protoStr,
+		"V4,dev-type tun,link-mtu %d,tun-mtu %d,proto %s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-client",
+		linkMTU, tunMTU, protoStr,
 	)
 }
 
@@ -1255,7 +1260,7 @@ const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=3
 //	[uint16_be(len+1)][username\0]
 //	[uint16_be(len+1)][password\0]
 //	[uint16_be(len+1)][peer_info\0]
-func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string, awsFormat bool) error {
+func sendAuthPacket(w io.Writer, proto profile.Proto, tunMTU int, username, password string, awsFormat bool) error {
 	var body []byte
 
 	// key_method byte
@@ -1278,7 +1283,7 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string,
 			b := []byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)}
 			return append(append(b, s...), 0x00)
 		}
-		body = append(body, authStr(buildTunnelOptions(proto))...)
+		body = append(body, authStr(buildTunnelOptions(proto, tunMTU))...)
 		body = append(body, authStr(username)...)
 		body = append(body, authStr(password)...)
 		body = append(body, authStr(peerInfo)...)
@@ -1300,7 +1305,7 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string,
 		b := []byte{byte(l >> 8), byte(l)}
 		return append(append(b, s...), 0x00)
 	}
-	body = append(body, authStr(buildTunnelOptions(proto))...)
+	body = append(body, authStr(buildTunnelOptions(proto, tunMTU))...)
 	body = append(body, authStr(username)...)
 	body = append(body, authStr(password)...)
 	body = append(body, authStr(peerInfo)...)
@@ -2159,7 +2164,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 	// is called after the renegotiated TLS session reaches ACTIVE state, which
 	// requires the auth exchange to complete first.
 	username, password := c.rekeyAuthCredentials()
-	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, username, password, c.awsFormat); err != nil {
+	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, c.prof.TunMTU, username, password, c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey send auth: %w", err)
 	}
@@ -2433,20 +2438,29 @@ func (c *Client) setDisconnected(err error) {
 	}
 }
 
-// parseTunMTU extracts the tun-mtu value from a PUSH_REPLY message.
-// Returns profileMTU (or 1500 if that is 0) when the directive is absent.
+// parseTunMTU extracts the tun-mtu value from a PUSH_REPLY message. An
+// explicit profileMTU is an upper bound; a server may only reduce it. Returns
+// profileMTU (or 1500 if that is 0) when the directive is absent or invalid.
 func parseTunMTU(pushRaw string, profileMTU int) int {
+	pushedMTU := 0
 	for _, field := range strings.Split(strings.TrimRight(pushRaw, "\x00"), ",") {
 		parts := strings.Fields(strings.TrimSpace(field))
 		if len(parts) == 2 && strings.EqualFold(parts[0], "tun-mtu") {
 			var v int
 			if _, err := fmt.Sscanf(parts[1], "%d", &v); err == nil && v >= 68 && v <= 65535 {
-				return v
+				pushedMTU = v
+				break
 			}
 		}
 	}
 	if profileMTU > 0 {
+		if pushedMTU > 0 && pushedMTU < profileMTU {
+			return pushedMTU
+		}
 		return profileMTU
+	}
+	if pushedMTU > 0 {
+		return pushedMTU
 	}
 	return 1500
 }
