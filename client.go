@@ -691,6 +691,11 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.setDisconnected(err)
 		return fmt.Errorf("vpn: parse PUSH_REPLY DNS: %w", err)
 	}
+	dnsOpts = dns.Merge(dnsOpts, &dns.Config{
+		Servers:       c.prof.DNSServers,
+		SearchDomains: c.prof.DNSSearchDomains,
+		RouteDomains:  c.prof.DNSRouteDomains,
+	})
 	c.pushOpts = pushOpts
 	c.dnsOpts = dnsOpts
 
@@ -2384,7 +2389,13 @@ func (c *Client) cleanup() {
 			ifIndex = iface.Index
 		}
 
-		// Close the TUN device first so the kernel removes the interface and
+		// Revert DNS while the TUN interface still exists. This explicitly removes
+		// its systemd-resolved state rather than relying on link deletion.
+		if c.dnsOpts != nil {
+			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
+		}
+
+		// Close the TUN device so the kernel removes the interface and
 		// all routes associated with it (including redirect-gateway 0.0.0.0/0).
 		// On macOS, attempting to delete routes via /sbin/route while the TUN
 		// gateway host route has already been removed causes /sbin/route to
@@ -2400,9 +2411,6 @@ func (c *Client) cleanup() {
 			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
 			c.serverBypassIP = nil
 			c.serverBypassGW = nil
-		}
-		if c.dnsOpts != nil {
-			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
 		}
 	}
 }

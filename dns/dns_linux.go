@@ -24,11 +24,20 @@ type resolvedDomainEntry struct {
 }
 
 func resolvedLinkDomains(cfg *Config) []resolvedDomainEntry {
-	// A route-only root domain, represented as {".", true} on the D-Bus API,
-	// matches every multi-label DNS name. This prevents systemd-resolved from
-	// treating all default DNS links (for example the Wi-Fi resolver) as equal
-	// candidates. RevertLink removes this setting on disconnect.
-	domains := []resolvedDomainEntry{{Domain: ".", RouteOnly: true}}
+	var domains []resolvedDomainEntry
+	if len(cfg.RouteDomains) == 0 {
+		// A route-only root domain, represented as {".", true} on the D-Bus
+		// API, matches every multi-label DNS name. This prevents
+		// systemd-resolved from treating all default DNS links (for example the
+		// Wi-Fi resolver) as equal candidates.
+		domains = append(domains, resolvedDomainEntry{Domain: ".", RouteOnly: true})
+	} else {
+		// Explicit DOMAIN-ROUTE values select split DNS. A route-only domain is
+		// used for routing but is never appended to single-label lookups.
+		for _, d := range cfg.RouteDomains {
+			domains = append(domains, resolvedDomainEntry{Domain: d, RouteOnly: true})
+		}
+	}
 	for _, d := range cfg.SearchDomains {
 		domains = append(domains, resolvedDomainEntry{Domain: d, RouteOnly: false})
 	}
@@ -46,9 +55,9 @@ func ifIndex(ifName string) (int32, error) {
 // ApplyResolved configures DNS via systemd-resolved over D-Bus (no polkit).
 //
 // It calls org.freedesktop.resolve1.Manager.SetLinkDNS and SetLinkDomains,
-// scoping the servers to the TUN interface ifName. A route-only root domain
-// (~.) makes the VPN resolver the preferred resolver for all multi-label
-// queries, rather than racing it with DNS servers on physical links.
+// scoping the servers to the TUN interface ifName. Without explicit
+// DOMAIN-ROUTE values, a route-only root domain (~.) makes the VPN resolver
+// preferred for all multi-label queries. Explicit routes select split DNS.
 func ApplyResolved(cfg *Config, ifName string) error {
 	if cfg == nil || len(cfg.Servers) == 0 {
 		return nil

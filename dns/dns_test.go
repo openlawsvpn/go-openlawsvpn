@@ -12,7 +12,8 @@ import (
 func TestParsePushReply_DNS(t *testing.T) {
 	msg := "PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5," +
 		"dhcp-option DNS 10.8.0.1,dhcp-option DNS 8.8.8.8," +
-		"dhcp-option DOMAIN corp.example.com\x00"
+		"dhcp-option DOMAIN corp.example.com," +
+		"dhcp-option DOMAIN-ROUTE private.example.com\x00"
 
 	cfg, err := ParsePushReply(msg)
 	if err != nil {
@@ -30,6 +31,34 @@ func TestParsePushReply_DNS(t *testing.T) {
 	}
 	if len(cfg.SearchDomains) != 1 || cfg.SearchDomains[0] != "corp.example.com" {
 		t.Errorf("search domains: got %v, want [corp.example.com]", cfg.SearchDomains)
+	}
+	if len(cfg.RouteDomains) != 1 || cfg.RouteDomains[0] != "private.example.com" {
+		t.Errorf("route domains: got %v, want [private.example.com]", cfg.RouteDomains)
+	}
+}
+
+func TestMerge(t *testing.T) {
+	merged := Merge(
+		&Config{
+			Servers:       []net.IP{net.ParseIP("10.130.0.2")},
+			SearchDomains: []string{"corp.example.com"},
+			RouteDomains:  []string{"internal.example.com"},
+		},
+		&Config{
+			Servers:       []net.IP{net.ParseIP("10.130.0.2"), net.ParseIP("2001:db8::53")},
+			SearchDomains: []string{"CORP.EXAMPLE.COM", "vpn.example.com"},
+			RouteDomains:  []string{"internal.example.com", "eks.example.com"},
+		},
+	)
+
+	if got, want := len(merged.Servers), 2; got != want {
+		t.Errorf("server count = %d, want %d", got, want)
+	}
+	if got, want := len(merged.SearchDomains), 2; got != want {
+		t.Errorf("search-domain count = %d, want %d", got, want)
+	}
+	if got, want := len(merged.RouteDomains), 2; got != want {
+		t.Errorf("route-domain count = %d, want %d", got, want)
 	}
 }
 

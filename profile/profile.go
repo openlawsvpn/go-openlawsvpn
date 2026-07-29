@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -80,6 +81,12 @@ type Profile struct {
 	// Forces FlowAWSSSO regardless of the remote hostname, allowing non-AWS servers
 	// (e.g. the demo mockserver) to use the CRV1/SAML two-phase flow.
 	ForceSAMLFlow bool
+
+	// DNSServers, DNSSearchDomains, and DNSRouteDomains are static DNS options
+	// from the profile. They are combined with options pushed by the server.
+	DNSServers       []net.IP
+	DNSSearchDomains []string
+	DNSRouteDomains  []string
 }
 
 // AuthFlow describes which authentication mechanism the profile uses.
@@ -270,6 +277,22 @@ func ParseFile(r io.Reader) (*Profile, error) {
 		case "verify-x509-name":
 			if len(fields) >= 2 {
 				p.VerifyX509Name = fields[1]
+			}
+		case "dhcp-option":
+			if len(fields) < 3 {
+				continue
+			}
+			switch strings.ToUpper(fields[1]) {
+			case "DNS":
+				ip := net.ParseIP(fields[2])
+				if ip == nil {
+					return nil, fmt.Errorf("profile: dhcp-option DNS: invalid IP %q", fields[2])
+				}
+				p.DNSServers = append(p.DNSServers, ip)
+			case "DOMAIN":
+				p.DNSSearchDomains = append(p.DNSSearchDomains, fields[2])
+			case "DOMAIN-ROUTE":
+				p.DNSRouteDomains = append(p.DNSRouteDomains, fields[2])
 			}
 		case "ca":
 			// Inline file reference: ca /path/to/ca.crt — not supported here.
