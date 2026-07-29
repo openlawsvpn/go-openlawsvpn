@@ -51,9 +51,9 @@ impl ProfileStore {
         id
     }
 
-    pub fn delete(&mut self, id: &str) {
+    pub fn delete(&mut self, id: &str) -> std::io::Result<()> {
         let dir = self.base_dir.join(id);
-        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(dir)
     }
 
     pub fn config_path(&self, id: &str) -> Option<PathBuf> {

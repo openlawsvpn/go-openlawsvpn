@@ -156,6 +156,9 @@ impl ConnectionScreen {
                     vpn.clone(),
                     store.clone(),
                     toast_overlay.clone(),
+                    self.list_box.clone(),
+                    self.empty_label.clone(),
+                    self.scrolled.clone(),
                 );
                 self.list_box.append(&row);
             }
@@ -170,6 +173,9 @@ impl ConnectionScreen {
         vpn: Rc<VpnService>,
         store: Rc<RefCell<ProfileStore>>,
         toast_overlay: ToastOverlay,
+        list_box: ListBox,
+        empty_label: Label,
+        scrolled: ScrolledWindow,
     ) -> ActionRow {
         let row = ActionRow::new();
         row.set_title(&profile.name);
@@ -256,6 +262,7 @@ impl ConnectionScreen {
             let profile_name = profile.name.clone();
             let store = store.clone();
             let toast_overlay = toast_overlay.clone();
+            let row_for_delete = row.clone();
             // Only allow delete when not actively connected on this profile
             let deletable = !(is_active && matches!(current_state,
                 ConnectionState::Connected { .. } | ConnectionState::Connecting | ConnectionState::WaitingSaml
@@ -267,7 +274,7 @@ impl ConnectionScreen {
                 gesture.connect_pressed(move |g, _, x, y| {
                     let widget = g.widget();
                     let Some(widget) = widget else { return };
-                    let popover = gtk4::PopoverMenu::from_model(None::<&gtk4::gio::MenuModel>);
+                    let popover = gtk4::Popover::new();
                     let menu_box = GtkBox::new(Orientation::Vertical, 4);
                     menu_box.set_margin_start(4);
                     menu_box.set_margin_end(4);
@@ -287,11 +294,27 @@ impl ConnectionScreen {
                     let profile_name = profile_name.clone();
                     let toast_overlay = toast_overlay.clone();
                     let popover_clone = popover.clone();
+                    let row_for_delete = row_for_delete.clone();
+                    let list_box = list_box.clone();
+                    let empty_label = empty_label.clone();
+                    let scrolled = scrolled.clone();
                     delete_btn.connect_clicked(move |_| {
-                        store.borrow_mut().delete(&profile_id);
-                        let toast = Toast::new(&format!("Profile '{}' deleted.", profile_name));
-                        toast_overlay.add_toast(toast);
                         popover_clone.popdown();
+                        match store.borrow_mut().delete(&profile_id) {
+                            Ok(()) => {
+                                list_box.remove(&row_for_delete);
+                                if list_box.first_child().is_none() {
+                                    empty_label.set_visible(true);
+                                    scrolled.set_visible(false);
+                                }
+                                let toast = Toast::new(&format!("Profile '{}' deleted.", profile_name));
+                                toast_overlay.add_toast(toast);
+                            }
+                            Err(e) => {
+                                let toast = Toast::new(&format!("Could not delete profile '{}': {}", profile_name, e));
+                                toast_overlay.add_toast(toast);
+                            }
+                        }
                     });
 
                     popover.popup();
