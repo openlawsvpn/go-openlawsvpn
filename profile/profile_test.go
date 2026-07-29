@@ -281,3 +281,16 @@ func TestParseMSSFixInvalid(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthFederateForcesSAMLFlow(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.test 443\nauth-federate\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.ForceSAMLFlow {
+		t.Fatal("ForceSAMLFlow = false, want true")
+	}
+	if got := p.DetectFlow(); got != profile.FlowAWSSSO {
+		t.Errorf("DetectFlow() = %v, want FlowAWSSSO", got)
+	}
+}

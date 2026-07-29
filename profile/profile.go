@@ -77,9 +77,10 @@ type Profile struct {
 	// AWS Client VPN profiles typically set this to the actual certificate CN (e.g. "mtlab.ai").
 	VerifyX509Name string
 
-	// ForceSAMLFlow is set when the profile contains 'x-openlawsvpn-flow saml'.
-	// Forces FlowAWSSSO regardless of the remote hostname, allowing non-AWS servers
-	// (e.g. the demo mockserver) to use the CRV1/SAML two-phase flow.
+	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
+	// 'x-openlawsvpn-flow saml'. It forces FlowAWSSSO regardless of the remote
+	// hostname, allowing non-AWS servers (e.g. the demo mockserver) to use the
+	// CRV1/SAML two-phase flow.
 	ForceSAMLFlow bool
 
 	// DNSServers, DNSSearchDomains, and DNSRouteDomains are static DNS options
@@ -270,6 +271,11 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			p.MSSFix = n
 		case "remote-random-hostname":
 			p.RandomHostname = true
+		case "auth-federate":
+			// AWS Client VPN profiles use this OpenVPN directive to request
+			// federated (SAML) authentication. Treat it as the standard spelling
+			// of the existing explicit SAML-flow override.
+			p.ForceSAMLFlow = true
 		case "x-openlawsvpn-flow":
 			if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
 				p.ForceSAMLFlow = true
