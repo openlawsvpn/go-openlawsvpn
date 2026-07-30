@@ -64,8 +64,12 @@ type Profile struct {
 	TunMTU int
 
 	// MSSFix is the maximum segment size clamp value, from the 'mssfix' directive.
-	// 0 means no MSS clamping.
+	// A zero value with MSSFixSet true explicitly disables MSS clamping.
 	MSSFix int
+	// MSSFixSet reports whether the profile explicitly set a numeric mssfix
+	// value. It distinguishes "mssfix 0" from an omitted directive, for which
+	// OpenVPN applies its default MSS clamp.
+	MSSFixSet bool
 
 	// RandomHostname indicates the 'remote-random-hostname' directive was present.
 	// When true, the client must prepend a random subdomain to Remote before dialing.
@@ -261,14 +265,17 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			}
 			p.TunMTU = n
 		case "mssfix":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: mssfix: missing value")
+			// OpenVPN accepts a bare "mssfix" and applies its default. Keep
+			// MSSFixSet false in that case, exactly as when the directive is
+			// omitted. A numeric zero is an explicit opt-out.
+			if len(fields) >= 2 {
+				n, err := strconv.Atoi(fields[1])
+				if err != nil || n < 0 {
+					return nil, fmt.Errorf("profile: mssfix: invalid %q", fields[1])
+				}
+				p.MSSFix = n
+				p.MSSFixSet = true
 			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("profile: mssfix: invalid %q", fields[1])
-			}
-			p.MSSFix = n
 		case "remote-random-hostname":
 			p.RandomHostname = true
 		case "auth-federate":

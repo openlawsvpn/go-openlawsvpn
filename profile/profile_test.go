@@ -257,6 +257,9 @@ func TestParseMSSFix(t *testing.T) {
 	if p.MSSFix != 1200 {
 		t.Errorf("MSSFix = %d, want 1200", p.MSSFix)
 	}
+	if !p.MSSFixSet {
+		t.Error("MSSFixSet = false, want true")
+	}
 }
 
 func TestParseMSSFixZero(t *testing.T) {
@@ -267,6 +270,19 @@ func TestParseMSSFixZero(t *testing.T) {
 	}
 	if p.MSSFix != 0 {
 		t.Errorf("MSSFix = %d, want 0", p.MSSFix)
+	}
+	if !p.MSSFixSet {
+		t.Error("MSSFixSet = false, want true for explicit mssfix 0")
+	}
+}
+
+func TestParseBareMSSFixUsesDefault(t *testing.T) {
+	p, err := profile.ParseString("remote h 443\nmssfix\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.MSSFixSet {
+		t.Error("MSSFixSet = true, want false for bare mssfix")
 	}
 }
 

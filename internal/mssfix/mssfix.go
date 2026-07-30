@@ -29,6 +29,25 @@ func Clamp(pkt []byte, maxMSS int) {
 	}
 }
 
+// ClampToMTU clamps a TCP SYN's advertised MSS to fit in an inner IP packet
+// with the supplied MTU. Unlike Clamp, it accounts for the inner IP header:
+// 20 bytes for IPv4 and 40 bytes for IPv6, plus the 20-byte TCP header.
+//
+// This mirrors OpenVPN's default mssfix behaviour, which starts from a link
+// MTU budget and derives the per-IP-version MSS during packet processing.
+func ClampToMTU(pkt []byte, mtu int) {
+	if mtu <= 0 || len(pkt) == 0 {
+		return
+	}
+
+	switch pkt[0] >> 4 {
+	case 4:
+		Clamp(pkt, mtu-20-20)
+	case 6:
+		Clamp(pkt, mtu-40-20)
+	}
+}
+
 func clamp4(pkt []byte, maxMSS int) {
 	if len(pkt) < 20 {
 		return

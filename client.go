@@ -39,6 +39,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
@@ -167,9 +168,12 @@ type Client struct {
 	// dataCh receives P_DATA_V2 wire packets from the control-channel relay
 	// goroutine (which owns all reads from rawConn).  wireToTun drains it.
 	dataCh chan []byte
-	// mssFix is the effective MSS clamp in bytes (0 = disabled).
-	// Set from pushOpts.Mssfix (server) or prof.MSSFix (profile), server wins.
+	// mssFix is an explicit maximum-MSS clamp in bytes (0 = not configured).
+	// A server-pushed value takes precedence over a profile value.
 	mssFix int
+	// mssFixMTU is an inner-packet MTU budget used for OpenVPN 2's default
+	// mssfix behaviour. It lets the clamp account for IPv4 versus IPv6 headers.
+	mssFixMTU int
 	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
 	// when redirect-gateway is active, so cleanup can remove it on disconnect.
 	serverBypassIP net.IP
@@ -785,17 +789,14 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		Compress:   pushOpts.Compression,
 	})
 
-	// Effective MSS clamp: server push wins over profile setting.
-	if pushOpts.Mssfix > 0 {
-		c.mssFix = pushOpts.Mssfix
-	} else {
-		c.mssFix = c.prof.MSSFix
-	}
-
 	// A server-pushed MTU can reduce the local MTU, but an explicit profile
 	// value remains an upper bound. This prevents a larger PUSH_REPLY value
 	// from undoing a user-selected MTU that avoids path fragmentation.
 	tunMTU := parseTunMTU(pushRaw, c.prof.TunMTU)
+	c.mssFix, c.mssFixMTU = effectiveMSSFix(
+		c.prof, pushOpts.Mssfix, tunMTU, c.prof.Proto, pushOpts.Cipher,
+		pushOpts.Compression, c.rawConn.RemoteAddr(),
+	)
 
 	// Stand up the TUN interface.
 	if pushOpts.Ifconfig != nil {
@@ -1824,7 +1825,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 			return
 		}
 		plain := buf[:n]
-		mssfix.Clamp(plain, c.mssFix)
+		c.clampMSS(plain)
 		wire, err := c.manager.Encrypt(plain)
 		if err != nil {
 			continue
@@ -1842,6 +1843,17 @@ func (c *Client) tunToWire(ctx context.Context) {
 		}
 		c.bytesSent.Add(uint64(n))
 	}
+}
+
+// clampMSS applies either an explicit MSS value from the profile/server or
+// OpenVPN 2's derived default. The latter starts with an inner-packet MTU so
+// IPv4 and IPv6 SYN packets retain their respective header allowance.
+func (c *Client) clampMSS(pkt []byte) {
+	if c.mssFix > 0 {
+		mssfix.Clamp(pkt, c.mssFix)
+		return
+	}
+	mssfix.ClampToMTU(pkt, c.mssFixMTU)
 }
 
 // keepaliveMagic is the plaintext payload of an OpenVPN keepalive data packet.
@@ -1891,7 +1903,7 @@ func (c *Client) wireToTun(ctx context.Context) {
 			if isKeepalive(plain) {
 				continue
 			}
-			mssfix.Clamp(plain, c.mssFix)
+			c.clampMSS(plain)
 			c.bytesRecv.Add(uint64(len(plain)))
 			c.tunDev.Write(plain) //nolint:errcheck
 		}
@@ -2463,6 +2475,85 @@ func parseTunMTU(pushRaw string, profileMTU int) int {
 		return pushedMTU
 	}
 	return 1500
+}
+
+const (
+	openVPN2DefaultTunMTU = 1500
+	// OpenVPN 2 applies this mssfix value, in MTU mode, when the profile uses
+	// its default 1500-byte TUN MTU and does not set mssfix explicitly.
+	openVPN2DefaultMSSFixMTU = 1492
+
+	outerIPv4HeaderLen = 20
+	outerIPv6HeaderLen = 40
+	udpHeaderLen       = 8
+	tcpHeaderLen       = 20
+	// OpenVPN's TCP transport prefixes each packet with a two-byte length.
+	openVPNTCPPrefixLen = 2
+
+	// P_DATA_V2 with an AEAD cipher is header(4) + packet ID(4) + tag(16).
+	openVPNGCMOverhead = 24
+	// CBC uses header(4) + HMAC(32) + IV(16), plus an encrypted packet ID and
+	// up to one AES block of padding. This conservative maximum prevents an
+	// MSS-selected packet from exceeding the link budget.
+	openVPNCBCOverhead = 72
+)
+
+// effectiveMSSFix returns either an explicit max-MSS value or an MTU from
+// which an MSS must be derived per inner IP version. It follows OpenVPN 2's
+// defaults when neither the server nor profile specified mssfix.
+func effectiveMSSFix(p *profile.Profile, pushedMSS, tunMTU int, proto profile.Proto, cipher string, compressionMode compress.Mode, remoteAddr net.Addr) (maxMSS, packetMTU int) {
+	if pushedMSS > 0 {
+		return pushedMSS, 0
+	}
+	if p.MSSFixSet {
+		return p.MSSFix, 0
+	}
+
+	// OpenVPN 2 uses its 1492-byte mssfix default only with the default TUN
+	// MTU. A non-default (including server-reduced) TUN MTU is itself the
+	// packet budget from which the TCP MSS is derived.
+	if tunMTU != openVPN2DefaultTunMTU {
+		return 0, tunMTU
+	}
+
+	outerIPLen := outerIPv4HeaderLen
+	if ip := addrIP(remoteAddr); ip != nil && ip.To4() == nil {
+		outerIPLen = outerIPv6HeaderLen
+	}
+
+	transportOverhead := udpHeaderLen
+	if proto == profile.ProtoTCP {
+		transportOverhead = tcpHeaderLen + openVPNTCPPrefixLen
+	}
+
+	dataOverhead := openVPNGCMOverhead
+	if strings.EqualFold(cipher, "AES-256-CBC") {
+		dataOverhead = openVPNCBCOverhead
+	}
+	// LZ4's pass-through framing prefixes every data-channel payload with one
+	// byte. Account for it before deriving the MSS from the link budget.
+	if compressionMode == compress.ModeLZ4 {
+		dataOverhead++
+	}
+
+	return 0, openVPN2DefaultMSSFixMTU - outerIPLen - transportOverhead - dataOverhead
+}
+
+func addrIP(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP
+	case *net.TCPAddr:
+		return a.IP
+	}
+	if addr == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
 }
 
 // parsePeerID extracts the numeric peer-id value from a PUSH_REPLY message.
