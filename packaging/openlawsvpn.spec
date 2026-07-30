@@ -198,7 +198,11 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 
 %changelog
 * Thu Jul 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.1-1
-- Update to 1.2.1.
+- feat(vpn): support `auth-federate` AWS SAML profiles
+- fix(vpn): honor configured tunnel MTUs and apply OpenVPN 2-compatible
+  default MSS clamping
+- feat(vpn): add `verb 4` TLS server-certificate diagnostics with verified
+  subject, issuer, serial number, validity, SANs, and SHA-256 fingerprint
 
 * Wed Jul 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.0-1
 - feat(dns): support full and split DNS from pushed or profile options
