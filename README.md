@@ -38,6 +38,8 @@ cd gui-gtk && cargo build --release
 CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 sudo ./openlawsvpn-cli -config your.ovpn
 
+# Add "verb 4" to the profile to log the verified server certificate.
+
 # Relay agent mode (CI/CD headless auth)
 sudo ./openlawsvpn-cli -relay <org-token> -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 
@@ -45,6 +47,12 @@ sudo ./openlawsvpn-cli -relay <org-token> -daemon -logfile /tmp/vpn.log -pidfile
 gomobile bind -o go-openlawsvpn.aar -target android -androidapi 31 \
     github.com/openlawsvpn/go-openlawsvpn
 ```
+
+With `verb 4`, the client logs the verified server certificate during every
+TLS handshake in an OpenSSL-like format: subject, issuer, serial number,
+validity period, DNS names, and SHA-256 fingerprint. This is the certificate
+used to authenticate the VPN server; it is not the user's SAML or client
+certificate.
 
 ### RPM packages (Fedora / RHEL)
 

@@ -20,8 +20,11 @@ package vpn
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -1742,8 +1745,104 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 	tlsConn.SetDeadline(time.Time{}) //nolint:errcheck
+	c.logRemoteCertificate(tlsConn.ConnectionState(), tlsCfg.ServerName)
 
 	return tlsConn, nil
+}
+
+// logRemoteCertificate emits certificate details only at OpenVPN's debug
+// verbosity level (verb 4 or greater). A certificate is shown only after the
+// TLS handshake has completed, so it is the one used by the control channel.
+func (c *Client) logRemoteCertificate(state tls.ConnectionState, serverName string) {
+	if c.prof.Verb < 4 || len(state.PeerCertificates) == 0 {
+		return
+	}
+
+	cert := state.PeerCertificates[0]
+	verification := "not verified"
+	if len(state.VerifiedChains) > 0 {
+		verification = "verified"
+	}
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+		"vpn: TLS server certificate (%s for %q):\nsubject=%s\nissuer=%s\nserial=%s\nnotBefore=%s\nnotAfter=%s\nX509v3 Subject Alternative Name:\n    %s\nsha256 Fingerprint=%s",
+		verification, serverName, formatCertificateName(cert.Subject), formatCertificateName(cert.Issuer),
+		certificateSerialNumber(cert), formatCertificateTime(cert.NotBefore), formatCertificateTime(cert.NotAfter),
+		formatCertificateSANs(cert), certificateFingerprint(cert.Raw),
+	)})
+}
+
+func formatCertificateName(name pkix.Name) string {
+	var fields []string
+	for _, value := range name.Country {
+		fields = append(fields, "C="+value)
+	}
+	for _, value := range name.Province {
+		fields = append(fields, "ST="+value)
+	}
+	for _, value := range name.Locality {
+		fields = append(fields, "L="+value)
+	}
+	for _, value := range name.Organization {
+		fields = append(fields, "O="+value)
+	}
+	for _, value := range name.OrganizationalUnit {
+		fields = append(fields, "OU="+value)
+	}
+	if name.CommonName != "" {
+		fields = append(fields, "CN="+name.CommonName)
+	}
+	if len(fields) == 0 {
+		return name.String()
+	}
+	return strings.Join(fields, ", ")
+}
+
+func formatCertificateTime(t time.Time) string {
+	return t.UTC().Format("Jan _2 15:04:05 2006 GMT")
+}
+
+// certificateSerialNumber retains a leading zero when it is part of the DER
+// serial-number value, matching the value shown by `openssl x509 -serial`.
+func certificateSerialNumber(cert *x509.Certificate) string {
+	var certificateFields []asn1.RawValue
+	if _, err := asn1.Unmarshal(cert.Raw, &certificateFields); err == nil && len(certificateFields) > 0 {
+		var tbsFields []asn1.RawValue
+		if _, err := asn1.Unmarshal(certificateFields[0].FullBytes, &tbsFields); err != nil {
+			return strings.ToUpper(cert.SerialNumber.Text(16))
+		}
+		index := 0
+		if len(tbsFields) > 0 && tbsFields[0].Class == asn1.ClassContextSpecific && tbsFields[0].Tag == 0 {
+			index = 1 // Version is optional and precedes the serial number.
+		}
+		if len(tbsFields) > index && tbsFields[index].Tag == asn1.TagInteger {
+			return strings.ToUpper(hex.EncodeToString(tbsFields[index].Bytes))
+		}
+	}
+	return strings.ToUpper(cert.SerialNumber.Text(16))
+}
+
+func formatCertificateSANs(cert *x509.Certificate) string {
+	var names []string
+	for _, name := range cert.DNSNames {
+		names = append(names, "DNS:"+name)
+	}
+	for _, ip := range cert.IPAddresses {
+		names = append(names, "IP Address:"+ip.String())
+	}
+	if len(names) == 0 {
+		return "<none>"
+	}
+	return strings.Join(names, ", ")
+}
+
+func certificateFingerprint(raw []byte) string {
+	fingerprint := sha256.Sum256(raw)
+	encoded := strings.ToUpper(hex.EncodeToString(fingerprint[:]))
+	var fields []string
+	for i := 0; i < len(encoded); i += 2 {
+		fields = append(fields, encoded[i:i+2])
+	}
+	return strings.Join(fields, ":")
 }
 
 // buildTLSConfig constructs a crypto/tls.Config from the profile.

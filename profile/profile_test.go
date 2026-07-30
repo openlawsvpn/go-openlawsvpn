@@ -100,6 +100,26 @@ func TestParseDefaults(t *testing.T) {
 	if p.Cipher != "AES-256-GCM" {
 		t.Errorf("default Cipher = %q", p.Cipher)
 	}
+	if p.Verb != 3 {
+		t.Errorf("default Verb = %d, want 3", p.Verb)
+	}
+}
+
+func TestParseVerb(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.com\nverb 4\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Verb != 4 {
+		t.Errorf("Verb = %d, want 4", p.Verb)
+	}
+}
+
+func TestParseInvalidVerb(t *testing.T) {
+	_, err := profile.ParseString("remote vpn.example.com\nverb 12\n")
+	if err == nil {
+		t.Fatal("expected error for invalid verb")
+	}
 }
 
 func TestParseStaticDNSOptions(t *testing.T) {
