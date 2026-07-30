@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.2.0
+Version:        1.2.1
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,9 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Thu Jul 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.1-1
+- Update to 1.2.1.
+
 * Wed Jul 29 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.0-1
 - feat(dns): support full and split DNS from pushed or profile options
 - fix(ios): configure full and split DNS for VPC-private resources
