@@ -177,8 +177,8 @@ aur-release:
 	echo "sha256=$$SHA"; \
 	cp packaging/PKGBUILD packaging/openlawsvpn.install "$(AUR_DIR)/"; \
 	podman run --rm --security-opt label=disable \
-	  -v "$$(realpath $(AUR_DIR)):/pkg" archlinux:base-devel \
-	  bash -c "useradd -m b; chown -R b /pkg; su b -c 'cd /pkg && makepkg --printsrcinfo'" \
+	  -v "$$(realpath $(AUR_DIR)):/src:ro" archlinux:base-devel \
+	  bash -c "useradd -m b; cp -a /src /tmp/pkg; chown -R b:b /tmp/pkg; su b -c 'cd /tmp/pkg && makepkg --printsrcinfo'" \
 	  > "$(AUR_DIR)/.SRCINFO"; \
 	echo "Updated $(AUR_DIR): PKGBUILD .SRCINFO openlawsvpn.install"
 
