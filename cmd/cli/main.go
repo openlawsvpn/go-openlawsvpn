@@ -88,6 +88,7 @@ func main() {
 	pidFile       := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
 	logFile       := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
 	browserCmd    := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
+	allowLegacyCN := flag.Bool("allow-legacy-cn", false, "allow exact Common Name verification for certificates without SANs")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
@@ -146,6 +147,11 @@ OPTIONS
 
   -browser <cmd>          Browser command to open the SAML URL.
                           Default: xdg-open. Example: -browser firefox
+
+  -allow-legacy-cn        Compatibility mode for certificates with no SAN.
+                          Retains CA-chain and serverAuth validation, but
+                          permits an exact legacy Common Name hostname match.
+                          Reissue the certificate with a DNS SAN instead.
 
   -h, -help               Print this help message.
 
@@ -223,7 +229,7 @@ RELAY ENDPOINTS
 			}
 			fallbackProfile = fp
 		}
-		runRelayMode(ctx, stop, fallbackProfile, relay.Config{
+		runRelayMode(ctx, stop, fallbackProfile, *allowLegacyCN, relay.Config{
 			Token:    *relayToken,
 			Hostname: hostname,
 			AgentID:  *relayAgentID,
@@ -243,6 +249,7 @@ RELAY ENDPOINTS
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
 		os.Exit(1)
 	}
+	p.AllowLegacyCN = *allowLegacyCN
 
 	client := vpn.New(p)
 
@@ -438,7 +445,7 @@ func isPermissionError(err error) bool {
 // Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
 // runRelayMode starts the relay agent. fallback may be nil — the app always sends
 // ovpn_config in the phase2 payload, so a local profile is not required.
-func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, cfg relay.Config, readyFD int) {
+func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, allowLegacyCN bool, cfg relay.Config, readyFD int) {
 	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
 
 	// agentPtr is set just after relay.New returns so the OnPhase2 closure can
@@ -484,6 +491,7 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 		} else {
 			return fmt.Errorf("relay: no ovpn_config in payload and no -config flag provided")
 		}
+		connProfile.AllowLegacyCN = allowLegacyCN
 
 		client := vpn.New(connProfile)
 		activeClientMu.Lock()

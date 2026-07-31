@@ -1762,6 +1762,8 @@ func (c *Client) logRemoteCertificate(state tls.ConnectionState, serverName stri
 	verification := "not verified"
 	if len(state.VerifiedChains) > 0 {
 		verification = "verified"
+	} else if c.prof.AllowLegacyCN {
+		verification = "verified with legacy Common Name fallback"
 	}
 	c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
 		"vpn: TLS server certificate (%s for %q):\nsubject=%s\nissuer=%s\nserial=%s\nnotBefore=%s\nnotAfter=%s\nX509v3 Subject Alternative Name:\n    %s\nsha256 Fingerprint=%s",
@@ -1880,15 +1882,30 @@ func buildTLSConfig(p *profile.Profile, extraKeyLog io.Writer) (*tls.Config, err
 		cfg.KeyLogWriter = io.MultiWriter(keyLogWriters...)
 	}
 
-	// Load CA for server verification.
+	// Load CA for server verification. A profile without <ca> uses the system
+	// trust store, which is crypto/tls's secure default.
+	var roots *x509.CertPool
 	if len(p.CA) > 0 {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(p.CA) {
 			return nil, fmt.Errorf("vpn: failed to parse CA certificate")
 		}
 		cfg.RootCAs = pool
-	} else {
-		cfg.InsecureSkipVerify = true //nolint:gosec // no CA in profile
+		roots = pool
+	} else if p.AllowLegacyCN {
+		var err error
+		roots, err = x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("vpn: load system certificate pool: %w", err)
+		}
+	}
+
+	if p.AllowLegacyCN {
+		// crypto/x509 intentionally no longer accepts Common Name hostname
+		// matching. Keep its chain, validity, and serverAuth verification, and
+		// replace only the hostname check for certificates with *no* SAN.
+		cfg.InsecureSkipVerify = true //nolint:gosec // verified by VerifyPeerCertificate below
+		cfg.VerifyPeerCertificate = verifyLegacyCommonName(serverName, roots)
 	}
 
 	// Load client certificate if present.
@@ -1901,6 +1918,61 @@ func buildTLSConfig(p *profile.Profile, extraKeyLog io.Writer) (*tls.Config, err
 	}
 
 	return cfg, nil
+}
+
+var subjectAlternativeNameOID = asn1.ObjectIdentifier{2, 5, 29, 17}
+
+// verifyLegacyCommonName returns a verifier for old server certificates that
+// predate SANs. It deliberately accepts only an exact Common Name match and
+// only when the certificate has no SAN extension at all. The usual certificate
+// chain, validity, CA constraints, and serverAuth EKU checks still apply.
+func verifyLegacyCommonName(serverName string, roots *x509.CertPool) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("vpn: TLS server sent no certificate")
+		}
+		if roots == nil {
+			return fmt.Errorf("vpn: no trusted certificate roots available for legacy Common Name verification")
+		}
+
+		leaf, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("vpn: parse TLS server certificate: %w", err)
+		}
+		for _, extension := range leaf.Extensions {
+			if extension.Id.Equal(subjectAlternativeNameOID) {
+				return fmt.Errorf("vpn: legacy Common Name fallback refused: server certificate contains a Subject Alternative Name")
+			}
+		}
+		if serverName == "" || net.ParseIP(serverName) != nil {
+			return fmt.Errorf("vpn: legacy Common Name verification requires a DNS hostname")
+		}
+		if !equalDNSName(leaf.Subject.CommonName, serverName) {
+			return fmt.Errorf("vpn: legacy Common Name mismatch: certificate CN %q does not exactly match %q", leaf.Subject.CommonName, serverName)
+		}
+
+		intermediates := x509.NewCertPool()
+		for _, raw := range rawCerts[1:] {
+			cert, err := x509.ParseCertificate(raw)
+			if err != nil {
+				return fmt.Errorf("vpn: parse TLS intermediate certificate: %w", err)
+			}
+			intermediates.AddCert(cert)
+		}
+		_, err = leaf.Verify(x509.VerifyOptions{
+			Roots:         roots,
+			Intermediates: intermediates,
+			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		})
+		if err != nil {
+			return fmt.Errorf("vpn: verify TLS server certificate chain: %w", err)
+		}
+		return nil
+	}
+}
+
+func equalDNSName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
 }
 
 // tunToWire reads plaintext IP packets from the TUN device, encrypts them,

@@ -85,6 +85,11 @@ type Profile struct {
 	// AWS Client VPN profiles typically set this to the actual certificate CN (e.g. "mtlab.ai").
 	VerifyX509Name string
 
+	// AllowLegacyCN enables a narrowly scoped compatibility verifier for server
+	// certificates that have no Subject Alternative Name extension. It is set by
+	// an explicit caller opt-in, never by an .ovpn profile.
+	AllowLegacyCN bool
+
 	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
 	// 'x-openlawsvpn-flow saml'. It forces FlowAWSSSO regardless of the remote
 	// hostname, allowing non-AWS servers (e.g. the demo mockserver) to use the

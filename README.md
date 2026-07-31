@@ -54,6 +54,22 @@ validity period, DNS names, and SHA-256 fingerprint. This is the certificate
 used to authenticate the VPN server; it is not the user's SAML or client
 certificate.
 
+### Legacy Common Name certificates
+
+Server certificates should identify the VPN hostname with a DNS Subject
+Alternative Name (SAN). For a temporary migration from an old certificate
+that has **no SAN at all**, the CLI provides an explicit compatibility switch:
+
+```bash
+sudo ./openlawsvpn-cli -config legacy.ovpn -allow-legacy-cn
+```
+
+It still verifies the certificate chain, validity period, and `serverAuth`
+usage against the profile's `<ca>` (or the system trust store), then requires
+an exact match between the expected hostname and the certificate Common Name.
+It never accepts a wildcard CN and rejects a certificate that contains a SAN.
+Reissue the server certificate with the correct DNS SAN and remove this flag.
+
 ### RPM packages (Fedora / RHEL)
 
 ```bash
