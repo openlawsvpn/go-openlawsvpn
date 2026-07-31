@@ -46,6 +46,10 @@ type Profile struct {
 	Cipher string
 	// Auth is the HMAC digest, e.g. "SHA256" (unused for GCM).
 	Auth string
+	// Verb controls optional diagnostic logging. It follows OpenVPN's 0–11
+	// verbosity scale; the default is 3. Verbosity 4 logs the verified server
+	// certificate during each TLS handshake.
+	Verb int
 
 	// RenegSec is the data-channel key renegotiation interval in seconds.
 	// An explicit "reneg-sec 0" disables client-initiated renegotiation, as it
@@ -64,8 +68,12 @@ type Profile struct {
 	TunMTU int
 
 	// MSSFix is the maximum segment size clamp value, from the 'mssfix' directive.
-	// 0 means no MSS clamping.
+	// A zero value with MSSFixSet true explicitly disables MSS clamping.
 	MSSFix int
+	// MSSFixSet reports whether the profile explicitly set a numeric mssfix
+	// value. It distinguishes "mssfix 0" from an omitted directive, for which
+	// OpenVPN applies its default MSS clamp.
+	MSSFixSet bool
 
 	// RandomHostname indicates the 'remote-random-hostname' directive was present.
 	// When true, the client must prepend a random subdomain to Remote before dialing.
@@ -77,9 +85,10 @@ type Profile struct {
 	// AWS Client VPN profiles typically set this to the actual certificate CN (e.g. "mtlab.ai").
 	VerifyX509Name string
 
-	// ForceSAMLFlow is set when the profile contains 'x-openlawsvpn-flow saml'.
-	// Forces FlowAWSSSO regardless of the remote hostname, allowing non-AWS servers
-	// (e.g. the demo mockserver) to use the CRV1/SAML two-phase flow.
+	// ForceSAMLFlow is set when the profile contains 'auth-federate' or
+	// 'x-openlawsvpn-flow saml'. It forces FlowAWSSSO regardless of the remote
+	// hostname, allowing non-AWS servers (e.g. the demo mockserver) to use the
+	// CRV1/SAML two-phase flow.
 	ForceSAMLFlow bool
 
 	// DNSServers, DNSSearchDomains, and DNSRouteDomains are static DNS options
@@ -125,6 +134,7 @@ func ParseFile(r io.Reader) (*Profile, error) {
 		Proto:  ProtoUDP,
 		Cipher: "AES-256-GCM",
 		Auth:   "SHA256",
+		Verb:   3,
 		// openvpn3-core ssl/proto.hpp starts with this default, then lets an
 		// explicit reneg-sec directive (including zero) override it.
 		RenegSec: 3600,
@@ -223,6 +233,15 @@ func ParseFile(r io.Reader) (*Profile, error) {
 				return nil, fmt.Errorf("profile: auth: missing value")
 			}
 			p.Auth = strings.ToUpper(fields[1])
+		case "verb":
+			if len(fields) < 2 {
+				return nil, fmt.Errorf("profile: verb: missing value")
+			}
+			n, err := strconv.Atoi(fields[1])
+			if err != nil || n < 0 || n > 11 {
+				return nil, fmt.Errorf("profile: verb: invalid %q", fields[1])
+			}
+			p.Verb = n
 		case "reneg-sec":
 			if len(fields) < 2 {
 				return nil, fmt.Errorf("profile: reneg-sec: missing value")
@@ -260,16 +279,24 @@ func ParseFile(r io.Reader) (*Profile, error) {
 			}
 			p.TunMTU = n
 		case "mssfix":
-			if len(fields) < 2 {
-				return nil, fmt.Errorf("profile: mssfix: missing value")
+			// OpenVPN accepts a bare "mssfix" and applies its default. Keep
+			// MSSFixSet false in that case, exactly as when the directive is
+			// omitted. A numeric zero is an explicit opt-out.
+			if len(fields) >= 2 {
+				n, err := strconv.Atoi(fields[1])
+				if err != nil || n < 0 {
+					return nil, fmt.Errorf("profile: mssfix: invalid %q", fields[1])
+				}
+				p.MSSFix = n
+				p.MSSFixSet = true
 			}
-			n, err := strconv.Atoi(fields[1])
-			if err != nil || n < 0 {
-				return nil, fmt.Errorf("profile: mssfix: invalid %q", fields[1])
-			}
-			p.MSSFix = n
 		case "remote-random-hostname":
 			p.RandomHostname = true
+		case "auth-federate":
+			// AWS Client VPN profiles use this OpenVPN directive to request
+			// federated (SAML) authentication. Treat it as the standard spelling
+			// of the existing explicit SAML-flow override.
+			p.ForceSAMLFlow = true
 		case "x-openlawsvpn-flow":
 			if len(fields) >= 2 && strings.ToLower(fields[1]) == "saml" {
 				p.ForceSAMLFlow = true

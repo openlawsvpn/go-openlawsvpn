@@ -20,8 +20,11 @@ package vpn
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -39,6 +42,7 @@ import (
 
 	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 	"github.com/openlawsvpn/go-openlawsvpn/dns"
+	"github.com/openlawsvpn/go-openlawsvpn/internal/compress"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/ctls"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/datachannel"
 	"github.com/openlawsvpn/go-openlawsvpn/internal/framing"
@@ -167,9 +171,12 @@ type Client struct {
 	// dataCh receives P_DATA_V2 wire packets from the control-channel relay
 	// goroutine (which owns all reads from rawConn).  wireToTun drains it.
 	dataCh chan []byte
-	// mssFix is the effective MSS clamp in bytes (0 = disabled).
-	// Set from pushOpts.Mssfix (server) or prof.MSSFix (profile), server wins.
+	// mssFix is an explicit maximum-MSS clamp in bytes (0 = not configured).
+	// A server-pushed value takes precedence over a profile value.
 	mssFix int
+	// mssFixMTU is an inner-packet MTU budget used for OpenVPN 2's default
+	// mssfix behaviour. It lets the clamp account for IPv4 versus IPv6 headers.
+	mssFixMTU int
 	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
 	// when redirect-gateway is active, so cleanup can remove it on disconnect.
 	serverBypassIP net.IP
@@ -445,7 +452,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	// Send OpenVPN auth packet over TLS.
 	// Per openvpn3-core cliproto.hpp: client sends auth, then reads server auth,
 	// then waits for ACTIVE state (auth ACKs exchanged), THEN sends PUSH_REQUEST.
-	if err := sendAuthPacket(tlsConn, c.prof.Proto, "N/A", "ACS::35001", c.awsFormat); err != nil {
+	if err := sendAuthPacket(tlsConn, c.prof.Proto, c.prof.TunMTU, "N/A", "ACS::35001", c.awsFormat); err != nil {
 		rawConn.Close()
 		c.setDisconnected(err)
 		return nil, fmt.Errorf("vpn: send auth packet: %w", err)
@@ -644,7 +651,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.tlsRW = tlsConn2
 
 		// Per openvpn3-core cliproto.hpp: auth → server auth → PUSH_REQUEST.
-		if err := sendAuthPacket(tlsConn2, c.prof.Proto, "N/A", crv1Password, c.awsFormat); err != nil {
+		if err := sendAuthPacket(tlsConn2, c.prof.Proto, c.prof.TunMTU, "N/A", crv1Password, c.awsFormat); err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
 			return fmt.Errorf("vpn: Phase2 send auth: %w", err)
@@ -785,15 +792,14 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		Compress:   pushOpts.Compression,
 	})
 
-	// Effective MSS clamp: server push wins over profile setting.
-	if pushOpts.Mssfix > 0 {
-		c.mssFix = pushOpts.Mssfix
-	} else {
-		c.mssFix = c.prof.MSSFix
-	}
-
-	// Parse tun-mtu from PUSH_REPLY (overrides profile setting).
+	// A server-pushed MTU can reduce the local MTU, but an explicit profile
+	// value remains an upper bound. This prevents a larger PUSH_REPLY value
+	// from undoing a user-selected MTU that avoids path fragmentation.
 	tunMTU := parseTunMTU(pushRaw, c.prof.TunMTU)
+	c.mssFix, c.mssFixMTU = effectiveMSSFix(
+		c.prof, pushOpts.Mssfix, tunMTU, c.prof.Proto, pushOpts.Cipher,
+		pushOpts.Compression, c.rawConn.RemoteAddr(),
+	)
 
 	// Stand up the TUN interface.
 	if pushOpts.Ifconfig != nil {
@@ -1185,22 +1191,25 @@ func (c *Client) LocalIP() string {
 // packet. The string is dynamic because proto and link-mtu differ between TCP
 // and UDP connections — advertising the wrong proto causes AUTH_FAILED.
 //
-// Values match what openvpn3-core 3.11.6 sends for each transport:
-//   - UDP: proto UDPv4,        link-mtu 1521, cipher AES-256-GCM, auth [null-digest], keysize 256
-//   - TCP: proto TCPv4_CLIENT, link-mtu 1543, cipher AES-256-GCM, auth [null-digest], keysize 256
+// Values match what openvpn3-core 3.11.6 sends for each transport at a
+// 1500-byte TUN MTU. link-mtu tracks a configured TUN MTU by retaining the
+// same transport overhead: 21 bytes for UDP and 43 bytes for TCP.
 //
 // The cipher/auth/keysize here are the NCP-negotiated values; openvpn3-core
 // always advertises AES-256-GCM in the tunnel options string when IV_NCP=2.
-func buildTunnelOptions(proto profile.Proto) string {
+func buildTunnelOptions(proto profile.Proto, tunMTU int) string {
+	if tunMTU == 0 {
+		tunMTU = 1500
+	}
 	protoStr := "UDPv4"
-	linkMTU := 1521
+	linkMTU := tunMTU + 21
 	if proto == profile.ProtoTCP {
 		protoStr = "TCPv4_CLIENT"
-		linkMTU = 1543
+		linkMTU = tunMTU + 43
 	}
 	return fmt.Sprintf(
-		"V4,dev-type tun,link-mtu %d,tun-mtu 1500,proto %s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-client",
-		linkMTU, protoStr,
+		"V4,dev-type tun,link-mtu %d,tun-mtu %d,proto %s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-client",
+		linkMTU, tunMTU, protoStr,
 	)
 }
 
@@ -1255,7 +1264,7 @@ const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=3
 //	[uint16_be(len+1)][username\0]
 //	[uint16_be(len+1)][password\0]
 //	[uint16_be(len+1)][peer_info\0]
-func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string, awsFormat bool) error {
+func sendAuthPacket(w io.Writer, proto profile.Proto, tunMTU int, username, password string, awsFormat bool) error {
 	var body []byte
 
 	// key_method byte
@@ -1278,7 +1287,7 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string,
 			b := []byte{byte(l >> 24), byte(l >> 16), byte(l >> 8), byte(l)}
 			return append(append(b, s...), 0x00)
 		}
-		body = append(body, authStr(buildTunnelOptions(proto))...)
+		body = append(body, authStr(buildTunnelOptions(proto, tunMTU))...)
 		body = append(body, authStr(username)...)
 		body = append(body, authStr(password)...)
 		body = append(body, authStr(peerInfo)...)
@@ -1300,7 +1309,7 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, username, password string,
 		b := []byte{byte(l >> 8), byte(l)}
 		return append(append(b, s...), 0x00)
 	}
-	body = append(body, authStr(buildTunnelOptions(proto))...)
+	body = append(body, authStr(buildTunnelOptions(proto, tunMTU))...)
 	body = append(body, authStr(username)...)
 	body = append(body, authStr(password)...)
 	body = append(body, authStr(peerInfo)...)
@@ -1736,8 +1745,104 @@ func (c *Client) tlsHandshake(ctx context.Context, rawConn net.Conn, capture io.
 		return nil, fmt.Errorf("TLS handshake failed: %w", err)
 	}
 	tlsConn.SetDeadline(time.Time{}) //nolint:errcheck
+	c.logRemoteCertificate(tlsConn.ConnectionState(), tlsCfg.ServerName)
 
 	return tlsConn, nil
+}
+
+// logRemoteCertificate emits certificate details only at OpenVPN's debug
+// verbosity level (verb 4 or greater). A certificate is shown only after the
+// TLS handshake has completed, so it is the one used by the control channel.
+func (c *Client) logRemoteCertificate(state tls.ConnectionState, serverName string) {
+	if c.prof.Verb < 4 || len(state.PeerCertificates) == 0 {
+		return
+	}
+
+	cert := state.PeerCertificates[0]
+	verification := "not verified"
+	if len(state.VerifiedChains) > 0 {
+		verification = "verified"
+	}
+	c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+		"vpn: TLS server certificate (%s for %q):\nsubject=%s\nissuer=%s\nserial=%s\nnotBefore=%s\nnotAfter=%s\nX509v3 Subject Alternative Name:\n    %s\nsha256 Fingerprint=%s",
+		verification, serverName, formatCertificateName(cert.Subject), formatCertificateName(cert.Issuer),
+		certificateSerialNumber(cert), formatCertificateTime(cert.NotBefore), formatCertificateTime(cert.NotAfter),
+		formatCertificateSANs(cert), certificateFingerprint(cert.Raw),
+	)})
+}
+
+func formatCertificateName(name pkix.Name) string {
+	var fields []string
+	for _, value := range name.Country {
+		fields = append(fields, "C="+value)
+	}
+	for _, value := range name.Province {
+		fields = append(fields, "ST="+value)
+	}
+	for _, value := range name.Locality {
+		fields = append(fields, "L="+value)
+	}
+	for _, value := range name.Organization {
+		fields = append(fields, "O="+value)
+	}
+	for _, value := range name.OrganizationalUnit {
+		fields = append(fields, "OU="+value)
+	}
+	if name.CommonName != "" {
+		fields = append(fields, "CN="+name.CommonName)
+	}
+	if len(fields) == 0 {
+		return name.String()
+	}
+	return strings.Join(fields, ", ")
+}
+
+func formatCertificateTime(t time.Time) string {
+	return t.UTC().Format("Jan _2 15:04:05 2006 GMT")
+}
+
+// certificateSerialNumber retains a leading zero when it is part of the DER
+// serial-number value, matching the value shown by `openssl x509 -serial`.
+func certificateSerialNumber(cert *x509.Certificate) string {
+	var certificateFields []asn1.RawValue
+	if _, err := asn1.Unmarshal(cert.Raw, &certificateFields); err == nil && len(certificateFields) > 0 {
+		var tbsFields []asn1.RawValue
+		if _, err := asn1.Unmarshal(certificateFields[0].FullBytes, &tbsFields); err != nil {
+			return strings.ToUpper(cert.SerialNumber.Text(16))
+		}
+		index := 0
+		if len(tbsFields) > 0 && tbsFields[0].Class == asn1.ClassContextSpecific && tbsFields[0].Tag == 0 {
+			index = 1 // Version is optional and precedes the serial number.
+		}
+		if len(tbsFields) > index && tbsFields[index].Tag == asn1.TagInteger {
+			return strings.ToUpper(hex.EncodeToString(tbsFields[index].Bytes))
+		}
+	}
+	return strings.ToUpper(cert.SerialNumber.Text(16))
+}
+
+func formatCertificateSANs(cert *x509.Certificate) string {
+	var names []string
+	for _, name := range cert.DNSNames {
+		names = append(names, "DNS:"+name)
+	}
+	for _, ip := range cert.IPAddresses {
+		names = append(names, "IP Address:"+ip.String())
+	}
+	if len(names) == 0 {
+		return "<none>"
+	}
+	return strings.Join(names, ", ")
+}
+
+func certificateFingerprint(raw []byte) string {
+	fingerprint := sha256.Sum256(raw)
+	encoded := strings.ToUpper(hex.EncodeToString(fingerprint[:]))
+	var fields []string
+	for i := 0; i < len(encoded); i += 2 {
+		fields = append(fields, encoded[i:i+2])
+	}
+	return strings.Join(fields, ":")
 }
 
 // buildTLSConfig constructs a crypto/tls.Config from the profile.
@@ -1819,7 +1924,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 			return
 		}
 		plain := buf[:n]
-		mssfix.Clamp(plain, c.mssFix)
+		c.clampMSS(plain)
 		wire, err := c.manager.Encrypt(plain)
 		if err != nil {
 			continue
@@ -1837,6 +1942,17 @@ func (c *Client) tunToWire(ctx context.Context) {
 		}
 		c.bytesSent.Add(uint64(n))
 	}
+}
+
+// clampMSS applies either an explicit MSS value from the profile/server or
+// OpenVPN 2's derived default. The latter starts with an inner-packet MTU so
+// IPv4 and IPv6 SYN packets retain their respective header allowance.
+func (c *Client) clampMSS(pkt []byte) {
+	if c.mssFix > 0 {
+		mssfix.Clamp(pkt, c.mssFix)
+		return
+	}
+	mssfix.ClampToMTU(pkt, c.mssFixMTU)
 }
 
 // keepaliveMagic is the plaintext payload of an OpenVPN keepalive data packet.
@@ -1886,7 +2002,7 @@ func (c *Client) wireToTun(ctx context.Context) {
 			if isKeepalive(plain) {
 				continue
 			}
-			mssfix.Clamp(plain, c.mssFix)
+			c.clampMSS(plain)
 			c.bytesRecv.Add(uint64(len(plain)))
 			c.tunDev.Write(plain) //nolint:errcheck
 		}
@@ -2159,7 +2275,7 @@ func (c *Client) doRekey(ctx context.Context) error {
 	// is called after the renegotiated TLS session reaches ACTIVE state, which
 	// requires the auth exchange to complete first.
 	username, password := c.rekeyAuthCredentials()
-	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, username, password, c.awsFormat); err != nil {
+	if err := sendAuthPacket(rekeyTLS, c.prof.Proto, c.prof.TunMTU, username, password, c.awsFormat); err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey send auth: %w", err)
 	}
@@ -2433,22 +2549,110 @@ func (c *Client) setDisconnected(err error) {
 	}
 }
 
-// parseTunMTU extracts the tun-mtu value from a PUSH_REPLY message.
-// Returns profileMTU (or 1500 if that is 0) when the directive is absent.
+// parseTunMTU extracts the tun-mtu value from a PUSH_REPLY message. An
+// explicit profileMTU is an upper bound; a server may only reduce it. Returns
+// profileMTU (or 1500 if that is 0) when the directive is absent or invalid.
 func parseTunMTU(pushRaw string, profileMTU int) int {
+	pushedMTU := 0
 	for _, field := range strings.Split(strings.TrimRight(pushRaw, "\x00"), ",") {
 		parts := strings.Fields(strings.TrimSpace(field))
 		if len(parts) == 2 && strings.EqualFold(parts[0], "tun-mtu") {
 			var v int
 			if _, err := fmt.Sscanf(parts[1], "%d", &v); err == nil && v >= 68 && v <= 65535 {
-				return v
+				pushedMTU = v
+				break
 			}
 		}
 	}
 	if profileMTU > 0 {
+		if pushedMTU > 0 && pushedMTU < profileMTU {
+			return pushedMTU
+		}
 		return profileMTU
 	}
+	if pushedMTU > 0 {
+		return pushedMTU
+	}
 	return 1500
+}
+
+const (
+	openVPN2DefaultTunMTU = 1500
+	// OpenVPN 2 applies this mssfix value, in MTU mode, when the profile uses
+	// its default 1500-byte TUN MTU and does not set mssfix explicitly.
+	openVPN2DefaultMSSFixMTU = 1492
+
+	outerIPv4HeaderLen = 20
+	outerIPv6HeaderLen = 40
+	udpHeaderLen       = 8
+	tcpHeaderLen       = 20
+	// OpenVPN's TCP transport prefixes each packet with a two-byte length.
+	openVPNTCPPrefixLen = 2
+
+	// P_DATA_V2 with an AEAD cipher is header(4) + packet ID(4) + tag(16).
+	openVPNGCMOverhead = 24
+	// CBC uses header(4) + HMAC(32) + IV(16), plus an encrypted packet ID and
+	// up to one AES block of padding. This conservative maximum prevents an
+	// MSS-selected packet from exceeding the link budget.
+	openVPNCBCOverhead = 72
+)
+
+// effectiveMSSFix returns either an explicit max-MSS value or an MTU from
+// which an MSS must be derived per inner IP version. It follows OpenVPN 2's
+// defaults when neither the server nor profile specified mssfix.
+func effectiveMSSFix(p *profile.Profile, pushedMSS, tunMTU int, proto profile.Proto, cipher string, compressionMode compress.Mode, remoteAddr net.Addr) (maxMSS, packetMTU int) {
+	if pushedMSS > 0 {
+		return pushedMSS, 0
+	}
+	if p.MSSFixSet {
+		return p.MSSFix, 0
+	}
+
+	// OpenVPN 2 uses its 1492-byte mssfix default only with the default TUN
+	// MTU. A non-default (including server-reduced) TUN MTU is itself the
+	// packet budget from which the TCP MSS is derived.
+	if tunMTU != openVPN2DefaultTunMTU {
+		return 0, tunMTU
+	}
+
+	outerIPLen := outerIPv4HeaderLen
+	if ip := addrIP(remoteAddr); ip != nil && ip.To4() == nil {
+		outerIPLen = outerIPv6HeaderLen
+	}
+
+	transportOverhead := udpHeaderLen
+	if proto == profile.ProtoTCP {
+		transportOverhead = tcpHeaderLen + openVPNTCPPrefixLen
+	}
+
+	dataOverhead := openVPNGCMOverhead
+	if strings.EqualFold(cipher, "AES-256-CBC") {
+		dataOverhead = openVPNCBCOverhead
+	}
+	// LZ4's pass-through framing prefixes every data-channel payload with one
+	// byte. Account for it before deriving the MSS from the link budget.
+	if compressionMode == compress.ModeLZ4 {
+		dataOverhead++
+	}
+
+	return 0, openVPN2DefaultMSSFixMTU - outerIPLen - transportOverhead - dataOverhead
+}
+
+func addrIP(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP
+	case *net.TCPAddr:
+		return a.IP
+	}
+	if addr == nil {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return nil
+	}
+	return net.ParseIP(host)
 }
 
 // parsePeerID extracts the numeric peer-id value from a PUSH_REPLY message.

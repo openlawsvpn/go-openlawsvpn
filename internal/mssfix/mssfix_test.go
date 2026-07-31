@@ -139,6 +139,32 @@ func TestClamp_ZeroMaxMSSIsNoop(t *testing.T) {
 	}
 }
 
+func TestClampToMTUDerivesIPv4MSS(t *testing.T) {
+	pkt := buildSYN4(1460)
+	mssfix.ClampToMTU(pkt, 1440)
+	if got := mssOf(pkt); got != 1400 {
+		t.Fatalf("MSS after MTU-derived clamp: got %d, want 1400", got)
+	}
+}
+
+func TestClampToMTUDerivesIPv6MSS(t *testing.T) {
+	// IPv6 header (40) + TCP header (24 with an MSS option).
+	pkt := make([]byte, 64)
+	pkt[0] = 0x60
+	pkt[6] = 6 // TCP next header
+	tcp := pkt[40:]
+	tcp[12] = 0x60 // data offset = 6 (24 bytes)
+	tcp[13] = 0x02 // SYN
+	tcp[20] = 2
+	tcp[21] = 4
+	binary.BigEndian.PutUint16(tcp[22:24], 1460)
+
+	mssfix.ClampToMTU(pkt, 1440)
+	if got := binary.BigEndian.Uint16(tcp[22:24]); got != 1380 {
+		t.Fatalf("IPv6 MSS after MTU-derived clamp: got %d, want 1380", got)
+	}
+}
+
 func TestClamp_ChecksumValid(t *testing.T) {
 	pkt := buildSYN4(1460)
 	mssfix.Clamp(pkt, 1300)
