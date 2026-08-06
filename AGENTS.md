@@ -1,4 +1,4 @@
-# Claude context for go-openlawsvpn
+# Agent context for go-openlawsvpn
 
 ## What this repo is
 
@@ -22,26 +22,35 @@ This repo is the current engine for all platforms:
 Consumers pin the engine via a `go-openlawsvpn.version` file and consume the
 gomobile `.aar` produced by `aar.yml`.
 
-### Status (verify version with `git tag --sort=-v:refname | head -1`)
+### Status
 
 The protocol is fully implemented and tested against a real AWS Client VPN
 endpoint. Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android
-(via the gomobile `.aar`). Current tag: **v1.2.0**. RPM built by COPR `vorona/openlawsvpn` (Fedora 43/44/rawhide,
-x86_64/aarch64/ppc64le). AUR package: `openlawsvpn` (x86_64/aarch64/powerpc64le);
-AUR releases use `pkg/x.y.z-N` tags (separate from `v*` library tags).
+(via the gomobile `.aar`). Verify the current release with
+`git tag --list 'v*' --sort=-v:refname | head -1`; do not copy a version from
+prose. RPMs
+are built by COPR `vorona/openlawsvpn` (Fedora 43/44/rawhide,
+x86_64/aarch64/ppc64le). AUR package: `openlawsvpn`
+(x86_64/aarch64/powerpc64le); AUR releases use `pkg/x.y.z-N` tags (separate
+from `v*` library tags).
 
 ### Bumping the version
 
-Run `scripts/bump-version.sh <new-version>` before committing a release. It
-updates all in-tree version strings in one shot:
+Never edit an individual version field for a release. Run
+`scripts/bump-version.sh <new-version>`, which updates all authoritative
+in-tree version fields and verifies that they agree:
 - `packaging/openlawsvpn.spec` — `Version:` field
 - `gui-gtk/Cargo.toml` — `version =` (controls what the About/Legal screens show)
 - `packaging/PKGBUILD` — `pkgver=`
-- `CLAUDE.md` — `Current tag:` line (this file)
 
 After running the script, add a `%changelog` entry in `packaging/openlawsvpn.spec`
-manually (RPM changelog format requires a date and author line). COPR does **not**
-auto-pick new tags — the spec must be pushed to trigger a rebuild.
+manually (RPM changelog format requires a date and author line), then run
+`make check-version` again before committing or tagging. Do not create a
+release tag if this check fails. COPR does **not** auto-pick new tags — the
+spec must be pushed to trigger a rebuild.
+
+The `vX.Y.Z` release tag must also match these fields. Release workflows call
+`scripts/check-version.sh vX.Y.Z` and fail before building if it differs.
 
 ### Retired / archived — do NOT treat as current
 
@@ -193,7 +202,7 @@ The Go `Client` struct exposes equivalent semantics via `Connect(ctx)`,
 
 ```
 go-openlawsvpn/
-  CLAUDE.md         — this file (AI/contributor context)
+  AGENTS.md         — this file (agent/contributor context)
   README.md         — user-facing docs, build instructions, known limitations
   client.go         — top-level Client: Connect, Disconnect, Stats, rekey loop
   client_tun_linux.go   — Linux TUN setup (openNativeTUN)

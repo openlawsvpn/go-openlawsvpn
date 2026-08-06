@@ -19,6 +19,9 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Check package versions
+        run: make check-version
+
       - name: Build
         run: go build ./...
         env:

@@ -8,9 +8,10 @@ Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 ## Status
 
 Working end-to-end on Linux (CLI + daemon + GTK4 GUI) and Android (via the
-gomobile `.aar`). Released — current tag **v1.2.0** (see `git tag`). The `.aar`
-build pipeline is in `.github/workflows/aar.yml`; RPMs are built by COPR
-`vorona/openlawsvpn`; Arch Linux packages on AUR as `openlawsvpn`.
+gomobile `.aar`). Find the current release with
+`git tag --list 'v*' --sort=-v:refname | head -1`. The `.aar` build pipeline is in
+`.github/workflows/aar.yml`; RPMs are built by COPR `vorona/openlawsvpn`;
+Arch Linux packages on AUR as `openlawsvpn`.
 
 ### Components
 
@@ -111,7 +112,7 @@ go test -v -tags=integration -timeout 120s .
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| **CI** (`ci.yml`) | push / PR to `main` | `go build`, `go test -race`, `go vet` |
+| **CI** (`ci.yml`) | push / PR to `main` | verifies release versions agree, then runs `go build`, `go test -race`, `go vet` |
 | **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
 | **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` + `daemon` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
@@ -121,10 +122,23 @@ RPM packages are **not** built in this repo's CI — they are built by COPR
 
 ### Publishing a new release
 
+Use the version script; do not edit only the RPM spec, Cargo manifest, or
+PKGBUILD. The Cargo manifest controls the version displayed by the GUI.
+
 ```bash
-git tag v1.1.2
-git push origin v1.1.2
+scripts/bump-version.sh X.Y.Z
+# Add the matching entry to packaging/openlawsvpn.spec's %changelog.
+make check-version
+git diff --check
+# Commit the complete version bump before tagging it.
+git tag vX.Y.Z
+git push origin vX.Y.Z
 ```
+
+Before pushing the tag, confirm that the bump includes
+`packaging/openlawsvpn.spec`, `packaging/PKGBUILD`, and `gui-gtk/Cargo.toml`.
+CI rejects a commit when these versions differ, and release workflows reject a
+tag that does not match them.
 
 The `aar.yml` workflow builds the AAR, attaches it (with SHA-256) to the GitHub
 Release, then triggers `bump-aar.yml` on `openlawsvpn-android-go` — which opens a
@@ -133,9 +147,9 @@ PR bumping the pinned AAR version automatically.
 **AUR release:** push a `pkg/x.y.z-N` tag to trigger PKGBUILD updates:
 
 ```bash
-git tag pkg/1.1.2-1
-git push origin pkg/1.1.2-1
-make aur-release VERSION=1.1.2-1   # updates PKGBUILD, hash, .SRCINFO in ../aur-openlawsvpn
+git tag pkg/X.Y.Z-1
+git push origin pkg/X.Y.Z-1
+make aur-release VERSION=X.Y.Z-1   # updates PKGBUILD, hash, .SRCINFO in ../aur-openlawsvpn
 # then: cd ../aur-openlawsvpn && git add -A && git commit -m "..." && git push
 ```
 
