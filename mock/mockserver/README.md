@@ -38,7 +38,7 @@ MOCK_CRV1=1 go run ./mock/mockserver
 | `MOCK_UDP_PORT` | `1194` | UDP listen port |
 | `CERT_DIR` | `""` | Directory with `ca.crt`, `server.crt`, `server.key`. When empty, ephemeral in-memory certs are generated and the CA PEM is printed to stderr |
 | `IDP_URL` | `https://openlawsvpn.com/demo/login/` | Base URL for the CRV1 login page. `?state=<id>` is appended |
-| `DEMO_TOKEN` | `DEMO2026OPENLAWS` | Fixed token the login page must POST to `127.0.0.1:35001`. Phase 2 rejects anything else |
+| `DEMO_TOKEN` | canonical base64 SAML protocol `Response` | Fixed response the login page must POST to `127.0.0.1:35001`. Phase 2 rejects anything else |
 
 ## Demo VPN server (no AWS required)
 
@@ -57,7 +57,7 @@ Custom Tab opens https://openlawsvpn.com/demo/login/?state=<id>
          ↓
 Reviewer enters  username: reviewer  /  password: Demo2026!
          ↓
-Page POSTs SAMLResponse=DEMO2026OPENLAWS to http://127.0.0.1:35001
+Page POSTs the fixed base64 SAMLResponse to http://127.0.0.1:35001
          ↓
 App captures token, sends Phase 2 → mockserver validates → PUSH_REPLY → tunnel up
 ```
@@ -72,14 +72,15 @@ fixed token is hardcoded in both the page and the server.
 
 ```bash
 cd mock
-bash gencerts.sh          # produces ca.crt, server.crt, server.key in ./certs/
+sudo bash gencerts.sh     # produces ca.crt, server.crt, server.key in /etc/mock-vpn/
 ```
 
 2. **Run the server:**
 
 ```bash
 MOCK_CRV1=1 \
-CERT_DIR=/etc/demo-vpn/certs \
+CERT_DIR=/etc/mock-vpn \
+MOCK_TCP_PORT=4433 \
 MOCK_UDP_PORT=1194 \
 go run ./mock/mockserver
 ```
@@ -92,14 +93,15 @@ CGO_ENABLED=0 go build -o demo-vpn-server ./mock/mockserver
 
 3. **Point DNS** — add an A record: `demo.openlawsvpn.com → <EC2 public IP>`
 
-4. **Firewall** — open UDP 1194 inbound.
+4. **Firewall** — open TCP 4433 inbound for the public demo profile. UDP 1194
+   is optional.
 
 5. **Distribute** `openlawsvpn-website/demo/demo-client.ovpn` — it contains only
    the CA cert, no client private key, safe to publish.
 
 ### Security note
 
-The demo token is fixed and public. This server grants tunnel access to **anyone**
+The demo response is fixed and public. This server grants tunnel access to **anyone**
 who knows the credentials shown on the login page. It should be used only as a
-demo environment, not to protect real resources. Shut it down or rotate
-`DEMO_TOKEN` between review windows if needed.
+demo environment, not to protect real resources. Do not regenerate the PKI for
+an existing public demo: clients pin its CA certificate.

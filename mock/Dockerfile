@@ -25,6 +25,6 @@ FROM scratch
 COPY --from=builder /out/mock-server /mock-server
 COPY --from=pki /etc/mock-vpn /etc/mock-vpn
 
-EXPOSE 443/tcp
+EXPOSE 4433/tcp
 
 ENTRYPOINT ["/mock-server"]

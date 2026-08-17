@@ -11,6 +11,8 @@ import (
 
 const validResponseXML = `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="canary"></samlp:Response>`
 
+const demoSAMLResponse = "PHNhbWxwOlJlc3BvbnNlIHhtbG5zOnNhbWxwPSJ1cm46b2FzaXM6bmFtZXM6dGM6U0FNTDoyLjA6cHJvdG9jb2wiIElEPSJvcGVubGF3c3Zwbi1kZW1vIj48L3NhbWxwOlJlc3BvbnNlPg=="
+
 func encodedValidResponse() string {
 	return base64.StdEncoding.EncodeToString([]byte(validResponseXML))
 }
@@ -23,6 +25,25 @@ func TestNormalizeAndValidateResponse(t *testing.T) {
 	}
 	if got != token {
 		t.Fatalf("normalized token differs from input")
+	}
+}
+
+func TestDemoSAMLResponsePassesACSValidation(t *testing.T) {
+	s := &ACSServer{token: make(chan string, 1)}
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"http://127.0.0.1/",
+		strings.NewReader(url.Values{"SAMLResponse": {demoSAMLResponse}}.Encode()),
+	)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	s.handleACS(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := <-s.token; got != demoSAMLResponse {
+		t.Fatal("ACS returned a response other than the canonical demo response")
 	}
 }
 

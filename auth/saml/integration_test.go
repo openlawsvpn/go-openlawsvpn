@@ -7,7 +7,7 @@
 //  1. Start mock server with MOCK_CRV1=1.
 //  2. Perform HARD_RESET + TLS handshake (same as Phase 2/3 tests).
 //  3. Server sends AUTH_FAILED,CRV1 challenge — parsed via HandlePhase1.
-//  4. Synthesize a mock SAML token (no real browser; the mock server accepts any).
+//  4. Submit the canonical demo SAML response (no real browser).
 //  5. CompletePhase2 sends AUTH_REPLY credential; server responds PUSH_REPLY.
 //  6. Verify PUSH_REPLY is returned and correctly classified.
 //  7. Start a SessionMonitor and send a simulated AUTH_FAILED to verify expiry detection.
@@ -42,6 +42,8 @@ import (
 	"github.com/openlawsvpn/go-openlawsvpn/auth/saml"
 	"github.com/openlawsvpn/go-openlawsvpn/testenv"
 )
+
+const demoSAMLResponse = "PHNhbWxwOlJlc3BvbnNlIHhtbG5zOnNhbWxwPSJ1cm46b2FzaXM6bmFtZXM6dGM6U0FNTDoyLjA6cHJvdG9jb2wiIElEPSJvcGVubGF3c3Zwbi1kZW1vIj48L3NhbWxwOlJlc3BvbnNlPg=="
 
 // TestCRV1RoundTripMockServer performs a complete SAML/CRV1 two-phase
 // authentication against the mock server running with MOCK_CRV1=1.
@@ -206,13 +208,11 @@ func TestCRV1RoundTripMockServer(t *testing.T) {
 
 	// ---- Step 4: simulate SAML token ----------------------------------------
 	// In a real flow the user visits ch.SAMLURL and the ACS server captures
-	// the SAMLResponse. The mock server accepts any non-empty token.
-	mockSAMLToken := "bW9ja1NBTU1SZXNwb25zZQ==" // base64("mockSAMLResponse")
-	t.Logf("using mock SAML token: %s", mockSAMLToken)
+	// the SAMLResponse. The mock server accepts only the fixed demo response.
 
 	// ---- Step 5: Phase 2 — send AUTH_REPLY, receive PUSH_REPLY --------------
 	tlsConn.SetDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
-	pushCM, err := saml.CompletePhase2(tlsConn, ch.StateID, mockSAMLToken, false)
+	pushCM, err := saml.CompletePhase2(tlsConn, ch.StateID, demoSAMLResponse, false)
 	if err != nil {
 		t.Fatalf("CompletePhase2: %v", err)
 	}

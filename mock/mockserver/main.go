@@ -16,7 +16,8 @@
 //	CERT_DIR                 — directory containing ca.crt server.crt server.key
 //	                           when unset, self-signed certs are generated in memory
 //	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login/)
-//	DEMO_TOKEN               — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
+//	DEMO_TOKEN               — fixed base64 SAMLResponse the login page POSTs to the ACS server
+//	                           (default: canonical minimal SAML protocol Response)
 package main
 
 import (
@@ -46,6 +47,10 @@ type event struct {
 	Event  string `json:"event"`
 	Detail string `json:"detail,omitempty"`
 }
+
+// defaultDemoSAMLResponse is the fixed, base64-encoded SAML protocol Response
+// used by the public demo. It is a compatibility fixture, not an assertion.
+const defaultDemoSAMLResponse = "PHNhbWxwOlJlc3BvbnNlIHhtbG5zOnNhbWxwPSJ1cm46b2FzaXM6bmFtZXM6dGM6U0FNTDoyLjA6cHJvdG9jb2wiIElEPSJvcGVubGF3c3Zwbi1kZW1vIj48L3NhbWxwOlJlc3BvbnNlPg=="
 
 func logEvent(name, detail string) {
 	e := event{
@@ -526,7 +531,7 @@ func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string)
 
 	demoToken := os.Getenv("DEMO_TOKEN")
 	if demoToken == "" {
-		demoToken = "DEMO2026OPENLAWS"
+		demoToken = defaultDemoSAMLResponse
 	}
 	if token != demoToken {
 		logEvent("crv1_phase2_rejected", fmt.Sprintf("state_id_len=%d bad_token_len=%d", len(stateID), len(token)))
