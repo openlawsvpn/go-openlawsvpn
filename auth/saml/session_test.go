@@ -44,10 +44,14 @@ func TestHandlePhase1CRV1(t *testing.T) {
 }
 
 func TestHandlePhase1AuthFailed(t *testing.T) {
-	r := strings.NewReader("AUTH_FAILED\x00")
+	const canary = "CANARY_AUTH_MATERIAL_MUST_NOT_BE_LOGGED"
+	r := strings.NewReader("AUTH_FAILED," + canary + "\x00")
 	_, err := saml.HandlePhase1(r)
 	if err == nil {
 		t.Fatal("expected error for AUTH_FAILED")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("phase 1 error disclosed server authentication material: %v", err)
 	}
 }
 
@@ -138,5 +142,16 @@ func TestParsePhase2CredentialErrors(t *testing.T) {
 		if err == nil {
 			t.Errorf("expected error for %q", m)
 		}
+	}
+}
+
+func TestParsePhase2CredentialErrorDoesNotDiscloseCredential(t *testing.T) {
+	const canary = "CANARY_SAML_ASSERTION_MUST_NOT_BE_LOGGED"
+	_, _, err := saml.ParsePhase2Credential("AUTH_REPLY,CRV1::" + canary)
+	if err == nil {
+		t.Fatal("expected malformed credential error")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("parse error disclosed credential input: %v", err)
 	}
 }

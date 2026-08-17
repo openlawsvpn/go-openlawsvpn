@@ -45,16 +45,14 @@ type MockServerEvent struct {
 	Detail string `json:"detail"`
 }
 
-// AuthPacketInfo holds the fields logged by the mock server in an
-// "auth_packet_recv" event.  These are the plaintext values of the
-// key-method-2 auth packet the client sent over TLS.
+// AuthPacketInfo holds the non-secret metadata logged by the mock server in an
+// "auth_packet_recv" event. Credential values and prefixes are never logged.
 type AuthPacketInfo struct {
 	TotalBytes     int    `json:"total_bytes"`
 	Options        string `json:"options"`
 	Username       string `json:"username"`
-	Password       string `json:"password"`
 	PasswordLen    int    `json:"password_len"`
-	PasswordPrefix string `json:"password_prefix"`
+	CredentialKind string `json:"credential_kind"`
 	PeerInfo       string `json:"peer_info"`
 }
 
@@ -89,11 +87,11 @@ type Config struct {
 
 // Server represents a running mock server.
 type Server struct {
-	containerID string          // set in Docker mode
-	proc        *exec.Cmd       // set in binary mode
-	logPipe     io.ReadCloser   // set in binary mode
-	TCPAddr     string          // "127.0.0.1:<port>"
-	UDPAddr     string          // "127.0.0.1:<port>"
+	containerID string        // set in Docker mode
+	proc        *exec.Cmd     // set in binary mode
+	logPipe     io.ReadCloser // set in binary mode
+	TCPAddr     string        // "127.0.0.1:<port>"
+	UDPAddr     string        // "127.0.0.1:<port>"
 	Events      []MockServerEvent
 }
 

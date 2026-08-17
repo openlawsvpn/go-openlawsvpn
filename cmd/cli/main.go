@@ -6,9 +6,8 @@
 //
 // Usage:
 //
-//	openlawsvpn-cli -config <path.ovpn> [-saml-token <base64token>]
-//	openlawsvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>] [-hostname <name>]
-//	openlawsvpn-cli -relay <token> -config <path.ovpn> [...]   # -config optional in relay mode
+//	openlawsvpn-cli -config <path.ovpn> [-saml-token-file <mode-0600-file>]
+//	openlawsvpn-cli -relay <token> [-relay-endpoint <wss://...>] [-agent-id <uuid>]
 //
 // Flags:
 //
@@ -17,13 +16,12 @@
 //	                 Optional in relay mode — the app always sends the profile inside
 //	                 the phase2 payload; -config is only used as a fallback if the
 //	                 payload carries no ovpn_config.
-//	-saml-token      Base64-encoded SAMLResponse.  When omitted, the CLI starts
-//	                 an ACS server on 127.0.0.1:35001 and waits for the browser
-//	                 callback, or reads the token from standard input if stdin
-//	                 is not a TTY.
-//	-relay           Organisation token for relay mode.  When set, the CLI connects
-//	                 to the relay WebSocket and waits for the mobile/desktop app to
-//	                 deliver credentials; Phase 1 and SAML run on the app, not here.
+//	-saml-token-file Read a base64-encoded SAMLResponse from a mode-0600 file.
+//	-saml-token-fd   Read it from an open descriptor (0 means standard input).
+//	-relay            Relay organisation identifier/token. The public demo value
+//	                  is "default"; use a token file for private bearer tokens.
+//	-relay-token-file / -relay-token-fd
+//	                  Optionally read a private relay token outside argv.
 //	-relay-endpoint  Relay WebSocket URL (default: wss://ws.relay.openlawsvpn.com).
 //	-agent-id        Stable UUID for this agent (default: random, changes on restart).
 //	-hostname        Human-readable label shown in the app (default: os.Hostname).
@@ -45,7 +43,7 @@
 //
 // Example:
 //
-//	sudo openlawsvpn-cli -relay $TOKEN -daemon \
+//	sudo openlawsvpn-cli -relay default -daemon \
 //	  -pidfile /tmp/openlawsvpn.pid \
 //	  -logfile /tmp/openlawsvpn.log
 //	# returns once the tunnel is up; VPN runs in background
@@ -61,6 +59,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -78,16 +77,20 @@ import (
 )
 
 func main() {
-	configPath    := flag.String("config", "", "path to .ovpn profile file (required in direct mode)")
-	samlToken     := flag.String("saml-token", "", "pre-supplied base64 SAMLResponse (skips ACS server)")
-	relayToken    := flag.String("relay", "", "organisation token — enables relay mode")
+	configPath := flag.String("config", "", "path to .ovpn profile file (required in direct mode)")
+	samlToken := flag.String("saml-token", "", "deprecated: SAMLResponse on command line (unsafe; use -saml-token-file or -saml-token-fd)")
+	samlTokenFile := flag.String("saml-token-file", "", "read a pre-supplied SAMLResponse from a mode-0600 file")
+	samlTokenFD := flag.Int("saml-token-fd", -1, "read a pre-supplied SAMLResponse from an open file descriptor (0 for stdin)")
+	relayToken := flag.String("relay", "", "relay organisation identifier/token (use 'default' for the public demo)")
+	relayTokenFile := flag.String("relay-token-file", "", "read the relay organisation token from a mode-0600 file")
+	relayTokenFD := flag.Int("relay-token-fd", -1, "read the relay organisation token from an open file descriptor (0 for stdin)")
 	relayEndpoint := flag.String("relay-endpoint", "wss://ws.relay.openlawsvpn.com", "relay WebSocket URL")
-	relayAgentID  := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
+	relayAgentID := flag.String("agent-id", "", "stable UUID for this agent (default: random)")
 	relayHostname := flag.String("hostname", "", "human-readable agent label (default: os.Hostname)")
-	daemonMode    := flag.Bool("daemon", false, "fork to background once the tunnel is up")
-	pidFile       := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
-	logFile       := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
-	browserCmd    := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
+	daemonMode := flag.Bool("daemon", false, "fork to background once the tunnel is up")
+	pidFile := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
+	logFile := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
+	browserCmd := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
@@ -115,8 +118,18 @@ OPTIONS
                           the app always sends the profile in the payload;
                           -config is only used as a fallback.
 
-  -relay <token>          Organisation token. Enables relay mode.
-                          Obtain from the app Settings screen.
+  -relay <token>          Organisation identifier/token; enables relay mode.
+                          The public demo value is "default". Private tokens
+                          act as bearer credentials; -relay-token-file is safer
+                          for long-running or shared systems.
+
+  -relay-token-file <path>
+                          Alternative input for a private organisation token.
+                          The file must be regular and have mode 0600 or stricter.
+
+  -relay-token-fd <fd>    Read the organisation token from an already-open file
+                          descriptor. Use 0 for standard input. Not supported
+                          with -daemon; use -relay-token-file in daemon mode.
 
   -relay-endpoint <url>   Relay WebSocket URL.
                           Default: wss://ws.relay.openlawsvpn.com
@@ -141,8 +154,14 @@ OPTIONS
                           Only used with -daemon. Default: /dev/null.
                           Example: -logfile /tmp/openlawsvpn.log
 
-  -saml-token <base64>    Pre-supplied SAMLResponse (base64). Skips the ACS
-                          server and browser flow. Useful for scripted testing.
+  -saml-token-file <path> Read a pre-supplied SAMLResponse from a mode-0600 file.
+
+  -saml-token-fd <fd>     Read a pre-supplied SAMLResponse from an already-open
+                          descriptor. Use 0 for standard input. Not supported
+                          with -daemon; use -saml-token-file in daemon mode.
+
+  -saml-token <base64>    Deprecated and rejected with -daemon because command
+                          arguments are visible in process listings.
 
   -browser <cmd>          Browser command to open the SAML URL.
                           Default: xdg-open. Example: -browser firefox
@@ -154,12 +173,18 @@ EXAMPLES
   # Interactive SAML login (direct mode)
   sudo openlawsvpn-cli -config ~/Downloads/client.ovpn
 
+  # Public relay demo
+  sudo openlawsvpn-cli -relay default -daemon \
+    -pidfile /tmp/openlawsvpn.pid \
+    -logfile /tmp/openlawsvpn.log
+
   # Relay agent — block until app approves, then stay in foreground
-  sudo openlawsvpn-cli -relay $TOKEN -config ~/Downloads/client.ovpn
+  sudo openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+    -config ~/Downloads/client.ovpn
 
   # Relay agent — daemon mode for CI/CD (exits once tunnel is up)
   sudo openlawsvpn-cli \
-    -relay $TOKEN \
+    -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
     -daemon \
     -pidfile /tmp/openlawsvpn.pid \
     -logfile /tmp/openlawsvpn.log
@@ -168,7 +193,8 @@ EXAMPLES
   sudo kill $(cat /tmp/openlawsvpn.pid)
 
   # Fixed agent identity across restarts
-  sudo openlawsvpn-cli -relay $TOKEN -agent-id acf3b812-… -hostname build-runner-01
+  sudo openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+    -agent-id acf3b812-… -hostname build-runner-01
 
 RELAY ENDPOINTS
   WebSocket:  wss://ws.relay.openlawsvpn.com
@@ -191,6 +217,12 @@ RELAY ENDPOINTS
 		}
 		readyFD = fd
 	}
+	if *daemonMode && readyFD == 0 {
+		if err := validateDaemonSecretSources(*samlToken, *relayToken, *samlTokenFD, *relayTokenFD); err != nil {
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	if *daemonMode && readyFD == 0 {
 		// Foreground parent: create a pipe, re-exec self as background child
@@ -199,13 +231,25 @@ RELAY ENDPOINTS
 		return
 	}
 
+	resolvedSAMLToken, err := resolveSecret("SAML token", *samlToken, *samlTokenFile, *samlTokenFD, saml.MaxSAMLResponseBytes, true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		os.Exit(1)
+	}
+	warnRelayLiteral := *relayToken != "" && *relayToken != "default"
+	resolvedRelayToken, err := resolveSecret("relay token", *relayToken, *relayTokenFile, *relayTokenFD, 64*1024, warnRelayLiteral)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: %v\n", err)
+		os.Exit(1)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Relay mode: -config is optional. The app delivers ovpn_config inside the
 	// phase2 payload, so no local profile is needed. If -config is provided it
 	// is used as a fallback when the payload carries no config.
-	if *relayToken != "" {
+	if resolvedRelayToken != "" {
 		hostname := *relayHostname
 		if hostname == "" {
 			if h, err := os.Hostname(); err == nil {
@@ -224,7 +268,7 @@ RELAY ENDPOINTS
 			fallbackProfile = fp
 		}
 		runRelayMode(ctx, stop, fallbackProfile, relay.Config{
-			Token:    *relayToken,
+			Token:    resolvedRelayToken,
 			Hostname: hostname,
 			AgentID:  *relayAgentID,
 			Endpoint: *relayEndpoint,
@@ -254,19 +298,19 @@ RELAY ENDPOINTS
 		remoteDesc, p.Port, protoName(p.Proto))
 
 	// Wire up the SAML token callback for AWS SSO profiles.
-	preSuppliedToken := *samlToken
+	preSuppliedToken := resolvedSAMLToken
 
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
-		fmt.Printf("openlawsvpn-cli: SAML authentication required\n")
-		fmt.Printf("openlawsvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
-		openBrowser(challenge.URL, *browserCmd)
-
 		if preSuppliedToken != "" {
 			tok := preSuppliedToken
 			preSuppliedToken = "" // consume it — re-auth will go through the ACS flow
 			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: SAML token received (%d chars)\n", len(tok))
 			return tok, nil
 		}
+
+		fmt.Printf("openlawsvpn-cli: SAML authentication required\n")
+		fmt.Printf("openlawsvpn-cli: Open this URL in your browser:\n\n  %s\n\n", challenge.URL)
+		openBrowser(challenge.URL, *browserCmd)
 
 		tok, err := waitForSAMLToken(ctx, challenge, *browserCmd)
 		if err != nil {
@@ -406,6 +450,85 @@ func readTokenFromStdin() (string, error) {
 		return "", fmt.Errorf("openlawsvpn-cli: read stdin: %w", err)
 	}
 	return "", fmt.Errorf("openlawsvpn-cli: EOF on stdin before SAMLResponse")
+}
+
+func validateDaemonSecretSources(samlLiteral, relayLiteral string, samlFD, relayFD int) error {
+	// Relay literals are intentionally supported for backward compatibility and
+	// for the public "default" organisation selector. Private relay users can
+	// opt into -relay-token-file to keep their bearer token out of argv.
+	_ = relayLiteral
+	if samlLiteral != "" {
+		return fmt.Errorf("daemon mode requires -saml-token-file; a SAML assertion must not remain in process arguments")
+	}
+	if samlFD >= 0 || relayFD >= 0 {
+		return fmt.Errorf("daemon mode cannot preserve file-descriptor token inputs across re-exec; use a token-file option")
+	}
+	return nil
+}
+
+func resolveSecret(name, literal, path string, fd, maxBytes int, warnLiteral bool) (string, error) {
+	sources := 0
+	if literal != "" {
+		sources++
+	}
+	if path != "" {
+		sources++
+	}
+	if fd >= 0 {
+		sources++
+	}
+	if sources > 1 {
+		return "", fmt.Errorf("%s: choose exactly one command-line, file, or file-descriptor source", name)
+	}
+	if literal != "" {
+		if warnLiteral {
+			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: warning: command-line %s is visible in process listings; use a token-file or file-descriptor option for private credentials\n", name)
+		}
+		return literal, nil
+	}
+	if path != "" {
+		f, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s file: %w", name, err)
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return "", fmt.Errorf("stat %s file: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("%s file must be a regular file", name)
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			return "", fmt.Errorf("%s file permissions %04o expose it to group or other users; remove all group/other permissions", name, info.Mode().Perm())
+		}
+		return readBoundedSecret(name, f, maxBytes)
+	}
+	if fd >= 0 {
+		f := os.NewFile(uintptr(fd), name)
+		if f == nil {
+			return "", fmt.Errorf("%s: invalid file descriptor %d", name, fd)
+		}
+		return readBoundedSecret(name, f, maxBytes)
+	}
+	return "", nil
+}
+
+func readBoundedSecret(name string, r io.Reader, maxBytes int) (string, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, int64(maxBytes+1)))
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", name, err)
+	}
+	if len(raw) > maxBytes {
+		clear(raw)
+		return "", fmt.Errorf("%s exceeds %d bytes", name, maxBytes)
+	}
+	secret := strings.TrimSpace(string(raw))
+	clear(raw)
+	if secret == "" {
+		return "", fmt.Errorf("%s is empty", name)
+	}
+	return secret, nil
 }
 
 // openBrowser opens url in the specified browser (or xdg-open if empty).

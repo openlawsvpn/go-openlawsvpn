@@ -15,21 +15,33 @@
 package saml
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/xml"
+	"errors"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ACSPort is the TCP port that AWS hardcodes for the SAML ACS callback.
 // This is fixed across all AWS regions and all IdPs.
 const ACSPort = 35001
 
+// MaxSAMLResponseBytes is the maximum encoded or decoded SAML response size
+// accepted by AWS Client VPN.
+const MaxSAMLResponseBytes = 128 * 1024
+
+const maxSAMLFormBytes = 3*MaxSAMLResponseBytes + 1024
+
 // Challenge contains the parsed fields from an AUTH_FAILED,CRV1 message.
 type Challenge struct {
 	// StateID is the opaque session identifier that must be echoed back in
-	// Phase 2 as the username: "CRV1::<StateID>::<SAMLToken>".
+	// Phase 2 as the key-method password: "CRV1::<StateID>::<SAMLToken>".
 	StateID string
 	// SAMLURL is the identity-provider URL the user must visit to authenticate.
 	SAMLURL string
@@ -55,14 +67,14 @@ type Challenge struct {
 func ParseCRV1(msg string) (*Challenge, error) {
 	const prefix = "AUTH_FAILED,CRV1:"
 	if !strings.HasPrefix(msg, prefix) {
-		return nil, fmt.Errorf("saml: not a CRV1 message: %q", msg)
+		return nil, fmt.Errorf("saml: not a CRV1 message")
 	}
 	rest := msg[len(prefix):]
 
 	// Field 1: flags (before first colon); may be "R" or "R,<remote_ip>"
 	colonIdx := strings.Index(rest, ":")
 	if colonIdx < 0 {
-		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after flags): %q", msg)
+		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after flags)")
 	}
 	flagsAndIP := rest[:colonIdx]
 	rest = rest[colonIdx+1:]
@@ -75,7 +87,7 @@ func ParseCRV1(msg string) (*Challenge, error) {
 	// Field 2: state_id (before next colon)
 	colonIdx = strings.Index(rest, ":")
 	if colonIdx < 0 {
-		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after state_id): %q", msg)
+		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after state_id)")
 	}
 	c.StateID = rest[:colonIdx]
 	rest = rest[colonIdx+1:]
@@ -83,7 +95,7 @@ func ParseCRV1(msg string) (*Challenge, error) {
 	// Field 3: base64_username (before next colon); may be empty
 	colonIdx = strings.Index(rest, ":")
 	if colonIdx < 0 {
-		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after username): %q", msg)
+		return nil, fmt.Errorf("saml: malformed CRV1 (no colon after username)")
 	}
 	// username field is informational; skip it
 	rest = rest[colonIdx+1:]
@@ -100,27 +112,40 @@ func ParseCRV1(msg string) (*Challenge, error) {
 	return c, nil
 }
 
-// BuildPhase2Username returns the username string that Phase 2 must send to
-// the VPN server after successful SAML authentication.
+// BuildPhase2Password returns the key-method password that Phase 2 must send
+// to the VPN server after successful SAML authentication.
 //
 //	Format: "CRV1::<state_id>::<base64_saml_token>"
-func BuildPhase2Username(stateID, samlToken string) string {
+func BuildPhase2Password(stateID, samlToken string) string {
 	return "CRV1::" + stateID + "::" + samlToken
 }
 
-// normalizeBase64 sanitises a SAMLResponse value received from a browser POST.
+// BuildPhase2Username is retained for source compatibility.
+// Deprecated: use BuildPhase2Password; production AWS key-method-2 framing
+// carries the CRV1 credential in the password field, not the username field.
+func BuildPhase2Username(stateID, samlToken string) string {
+	return BuildPhase2Password(stateID, samlToken)
+}
+
+// normalizeAndValidateResponse canonicalises and validates a SAMLResponse value
+// received from a browser POST.
 //
 // application/x-www-form-urlencoded encodes '+' as either '%2B' or as a raw
 // '+'.  Go's http.Request.FormValue URL-decodes the body, turning both into
 // either '+' or ' ' (space).  This function:
 //   - converts spaces back to '+' (undoes the URL-decode artifact)
-//   - strips all non-base64 characters (newlines, nulls, etc.)
+//   - permits only base64 characters plus ASCII line whitespace
 //   - converts URL-safe base64 ('-' → '+', '_' → '/')
 //   - re-adds '=' padding to make the length a multiple of 4
-//
-// Mirrors saml_capture.cpp normalize_base64() and SamlCallbackServer.kt normalizeBase64().
-func normalizeBase64(s string) string {
+func normalizeAndValidateResponse(s string) (string, error) {
+	if len(s) == 0 {
+		return "", fmt.Errorf("empty SAMLResponse")
+	}
+	if len(s) > MaxSAMLResponseBytes {
+		return "", fmt.Errorf("SAMLResponse exceeds %d bytes", MaxSAMLResponseBytes)
+	}
 	out := make([]byte, 0, len(s))
+	defer func() { clear(out) }()
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
@@ -129,17 +154,52 @@ func normalizeBase64(s string) string {
 		case (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
 			(c >= '0' && c <= '9') || c == '+' || c == '/':
 			out = append(out, c)
+		case c == '=':
+			out = append(out, c)
 		case c == '-':
 			out = append(out, '+') // URL-safe → standard
 		case c == '_':
 			out = append(out, '/') // URL-safe → standard
-		// strip '=', '\n', '\r', and anything else
+		case c == '\n' || c == '\r' || c == '\t':
+			// XML encoders may wrap long base64 values using ASCII whitespace.
+		default:
+			return "", fmt.Errorf("SAMLResponse contains invalid base64 data")
 		}
+	}
+	out = bytes.TrimRight(out, "=")
+	if bytes.ContainsRune(out, '=') {
+		return "", fmt.Errorf("SAMLResponse contains invalid base64 padding")
 	}
 	for len(out)%4 != 0 {
 		out = append(out, '=')
 	}
-	return string(out)
+	decoded := make([]byte, base64.StdEncoding.DecodedLen(len(out)))
+	n, err := base64.StdEncoding.Strict().Decode(decoded, out)
+	if err != nil {
+		return "", fmt.Errorf("SAMLResponse is not valid base64")
+	}
+	decoded = decoded[:n]
+	defer clear(decoded)
+	if len(decoded) > MaxSAMLResponseBytes {
+		return "", fmt.Errorf("decoded SAMLResponse exceeds %d bytes", MaxSAMLResponseBytes)
+	}
+	if err := validateResponseXML(decoded); err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+func validateResponseXML(data []byte) error {
+	var response struct {
+		XMLName xml.Name
+	}
+	if err := xml.Unmarshal(data, &response); err != nil {
+		return fmt.Errorf("SAMLResponse is not well-formed XML")
+	}
+	if response.XMLName.Local != "Response" || response.XMLName.Space != "urn:oasis:names:tc:SAML:2.0:protocol" {
+		return fmt.Errorf("SAMLResponse has an unexpected root element")
+	}
+	return nil
 }
 
 // ACSServer listens on 127.0.0.1:35001 for the browser's SAML POST callback.
@@ -148,9 +208,9 @@ func normalizeBase64(s string) string {
 //
 // The caller must cancel ctx to abort the server if no callback arrives in time.
 type ACSServer struct {
-	ln     net.Listener
-	token  chan string
-	errCh  chan error
+	ln    net.Listener
+	token chan string
+	errCh chan error
 }
 
 // NewACSServer creates and starts the ACS server.
@@ -175,7 +235,14 @@ func (s *ACSServer) Wait(ctx context.Context) (string, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleACS)
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		IdleTimeout:       5 * time.Second,
+		MaxHeaderBytes:    16 * 1024,
+	}
 
 	// Shut down the HTTP server when ctx is done.
 	go func() {
@@ -201,21 +268,39 @@ func (s *ACSServer) Wait(ctx context.Context) (string, error) {
 }
 
 func (s *ACSServer) handleACS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/x-www-form-urlencoded" {
+		http.Error(w, "unsupported content type", http.StatusUnsupportedMediaType)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSAMLFormBytes)
 	if err := r.ParseForm(); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "form too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
 	// r.FormValue URL-decodes the POST body, which converts base64 '+' characters
 	// (submitted as '%2B' or as raw '+' in application/x-www-form-urlencoded) into
-	// spaces.  normalizeBase64 converts those spaces back to '+', strips non-base64
-	// chars, and fixes padding — matching saml_capture.cpp normalize_base64().
-	tok := normalizeBase64(r.FormValue("SAMLResponse"))
-	if tok == "" {
-		http.Error(w, "missing SAMLResponse", http.StatusBadRequest)
+	// spaces. normalizeAndValidateResponse restores the base64 representation,
+	// rejects malformed input, and verifies a SAML protocol Response root.
+	tok, err := normalizeAndValidateResponse(r.FormValue("SAMLResponse"))
+	if err != nil {
+		http.Error(w, "invalid SAMLResponse", http.StatusBadRequest)
 		return
 	}
 	// Return a minimal HTML page that tells the user to close the browser.

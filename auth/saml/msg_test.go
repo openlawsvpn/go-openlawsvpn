@@ -76,10 +76,10 @@ func TestReadControlMsg(t *testing.T) {
 	}
 }
 
-func TestWritePhase2Credentials(t *testing.T) {
+func TestWritePhase2Credential(t *testing.T) {
 	var buf bytes.Buffer
-	username := saml.BuildPhase2Username("stateABC", "tok123")
-	if err := saml.WritePhase2Credentials(&buf, username); err != nil {
+	credential := saml.BuildPhase2Password("stateABC", "tok123")
+	if err := saml.WritePhase2Credential(&buf, credential); err != nil {
 		t.Fatal(err)
 	}
 	got := buf.String()
@@ -109,5 +109,19 @@ func TestSessionExpiredError(t *testing.T) {
 	var se2 *saml.SessionExpiredError
 	if errors.As(err2, &se2) {
 		t.Error("expected plain error, got *SessionExpiredError")
+	}
+}
+
+func TestWrapAuthFailedDoesNotDiscloseServerMessage(t *testing.T) {
+	const canary = "CANARY_AUTH_MATERIAL_MUST_NOT_BE_LOGGED"
+	for _, active := range []bool{false, true} {
+		err := saml.WrapAuthFailed("AUTH_FAILED,"+canary, active)
+		if strings.Contains(err.Error(), canary) {
+			t.Fatalf("active=%v: error disclosed server authentication material: %v", active, err)
+		}
+		var expired *saml.SessionExpiredError
+		if errors.As(err, &expired) && strings.Contains(expired.Msg, canary) {
+			t.Fatalf("active=%v: structured error retained server authentication material", active)
+		}
 	}
 }

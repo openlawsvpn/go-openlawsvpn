@@ -1,7 +1,7 @@
 # Maintainer: Anatolii Vorona <vorona.tolik@gmail.com>
 pkgbase=openlawsvpn
 pkgname=(openlawsvpn-daemon openlawsvpn-cli openlawsvpn-gui)
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="AWS Client VPN client with SAML/SSO support — pure Go stack"
 arch=(x86_64 aarch64 powerpc64le)
@@ -26,6 +26,9 @@ build() {
     CGO_ENABLED=0 go build -trimpath -o bin/openlawsvpn-cli ./cmd/cli
     cd gui-gtk
     cargo build --release --offline
+    cargo tree --locked --offline --edges normal,build --prefix none \
+        --no-dedupe --format $'{p}\t{l}' | LC_ALL=C sort -u \
+        > LICENSE.dependencies
 }
 
 package_openlawsvpn-daemon() {
@@ -94,4 +97,8 @@ package_openlawsvpn-gui() {
         "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.openlawsvpn.gui.svg"
 
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 gui-gtk/notice.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
+    install -Dm644 gui-gtk/LICENSE.dependencies \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE.dependencies"
 }

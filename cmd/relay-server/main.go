@@ -9,7 +9,7 @@
 //	relay-server [-addr :18080]
 //
 //	# CLI agent (same machine or LAN):
-//	ovpn3 -config tunnel.ovpn -relay mytoken -relay-endpoint ws://192.168.1.12:18080/ws
+//	ovpn3 -config tunnel.ovpn -relay testtoken -relay-endpoint ws://192.168.1.12:18080/ws
 //
 //	# Android app: set relay endpoint to http://192.168.1.12:18080/api/v1
 //	#              and org token to  mytoken
@@ -87,7 +87,7 @@ func (s *store) registerAgent(token, agentID, hostname, connID string) {
 		ConnID:   connID,
 	}
 	s.conns[connID] = make(chan []byte, 16)
-	log.Printf("agent registered: id=%s hostname=%s token=%s", agentID, hostname, token)
+	log.Printf("agent registered: id=%s hostname=%s", agentID, hostname)
 }
 
 func (s *store) unregisterConn(connID string) {
@@ -349,9 +349,9 @@ func (srv *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token    := r.URL.Query().Get("token")
+	token := r.URL.Query().Get("token")
 	hostname := r.URL.Query().Get("hostname")
-	agentID  := r.URL.Query().Get("agent_id")
+	agentID := r.URL.Query().Get("agent_id")
 	if token == "" || hostname == "" || agentID == "" {
 		http.Error(w, "missing token/hostname/agent_id", http.StatusBadRequest)
 		return
@@ -523,7 +523,7 @@ func main() {
 	addr := flag.String("addr", ":18080", "listen address")
 	flag.Parse()
 
-	st  := newStore()
+	st := newStore()
 	srv := &server{st: st}
 
 	log.Printf("relay-server listening on %s", *addr)

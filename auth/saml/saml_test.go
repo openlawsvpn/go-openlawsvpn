@@ -2,6 +2,7 @@ package saml_test
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -64,11 +65,22 @@ func TestParseCRV1Errors(t *testing.T) {
 	}
 }
 
-func TestBuildPhase2Username(t *testing.T) {
-	got := saml.BuildPhase2Username("myState", "base64token==")
+func TestParseCRV1ErrorDoesNotDiscloseInput(t *testing.T) {
+	const canary = "CANARY_SAML_URL_SECRET"
+	_, err := saml.ParseCRV1("AUTH_FAILED,CRV1:R:" + canary)
+	if err == nil {
+		t.Fatal("expected malformed challenge error")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("parse error disclosed challenge input: %v", err)
+	}
+}
+
+func TestBuildPhase2Password(t *testing.T) {
+	got := saml.BuildPhase2Password("myState", "base64token==")
 	want := "CRV1::myState::base64token=="
 	if got != want {
-		t.Errorf("BuildPhase2Username = %q, want %q", got, want)
+		t.Errorf("BuildPhase2Password = %q, want %q", got, want)
 	}
 }
 
@@ -79,7 +91,7 @@ func TestBuildPhase2Username(t *testing.T) {
 // the HTTP handler logic independently.
 func TestACSHandlerSAMLResponse(t *testing.T) {
 	// We can't bind 35001 reliably in tests; exercise the HTTP handler via
-	// the exported ParseCRV1 + BuildPhase2Username path, and separately
+	// the exported ParseCRV1 + BuildPhase2Password path, and separately
 	// test the server with a context-cancel path.
 	srv, err := saml.NewACSServer()
 	if err != nil {
@@ -89,7 +101,8 @@ func TestACSHandlerSAMLResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	token := "PHNhbWxwOlJlc3BvbnNl"
+	xmlResponse := `<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" ID="test"></samlp:Response>`
+	token := base64.StdEncoding.EncodeToString([]byte(xmlResponse))
 
 	// Send the POST from a goroutine.
 	go func() {

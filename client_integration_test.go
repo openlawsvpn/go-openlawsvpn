@@ -130,7 +130,7 @@ func TestConnectNoCRV1(t *testing.T) {
 		}
 		t.Logf("Connect: TUN not available (%v) — checking auth events only", err)
 	}
-	client.Disconnect() //nolint:errcheck
+	client.Disconnect()        //nolint:errcheck
 	client.WaitForDisconnect() //nolint:errcheck
 
 	time.Sleep(300 * time.Millisecond)
@@ -146,8 +146,8 @@ func TestConnectNoCRV1(t *testing.T) {
 	if ae.Username != "N/A" {
 		t.Errorf("username: got %q, want %q", ae.Username, "N/A")
 	}
-	if ae.Password != "ACS::35001" {
-		t.Errorf("password: got %q, want %q", ae.Password, "ACS::35001")
+	if ae.CredentialKind != "acs" {
+		t.Errorf("credential kind: got %q, want %q", ae.CredentialKind, "acs")
 	}
 	if !strings.HasPrefix(ae.Options, "V4,") {
 		t.Errorf("options should start with 'V4,', got %q", ae.Options)
@@ -199,7 +199,7 @@ func TestConnectCRV1Flow(t *testing.T) {
 		}
 		t.Logf("ConnectPhase2Reuse: TUN not available (%v) — checking auth events only", err)
 	}
-	client.Disconnect() //nolint:errcheck
+	client.Disconnect()        //nolint:errcheck
 	client.WaitForDisconnect() //nolint:errcheck
 
 	time.Sleep(300 * time.Millisecond)
@@ -211,17 +211,19 @@ func TestConnectCRV1Flow(t *testing.T) {
 	}
 
 	p1 := authEvents[0]
-	t.Logf("phase1 auth: username=%q password=%q", p1.Username, p1.Password)
-	if p1.Password != "ACS::35001" {
-		t.Errorf("phase1 password: got %q, want %q", p1.Password, "ACS::35001")
+	t.Logf("phase1 auth: username=%q credential_kind=%q", p1.Username, p1.CredentialKind)
+	if p1.CredentialKind != "acs" {
+		t.Errorf("phase1 credential kind: got %q, want %q", p1.CredentialKind, "acs")
 	}
 
 	p2 := authEvents[1]
-	t.Logf("phase2 auth: username=%q password_prefix=%q", p2.Username, p2.PasswordPrefix)
-	if !strings.HasPrefix(p2.Password, "CRV1::") {
-		t.Errorf("phase2 password should start with 'CRV1::', got %q", p2.PasswordPrefix)
+	t.Logf("phase2 auth: username=%q credential_kind=%q", p2.Username, p2.CredentialKind)
+	if p2.CredentialKind != "crv1" {
+		t.Errorf("phase2 credential kind: got %q, want %q", p2.CredentialKind, "crv1")
 	}
-	if !strings.Contains(p2.Password, demoToken) {
-		t.Errorf("phase2 password should contain the demo token")
+	for _, event := range srv.Events {
+		if strings.Contains(event.Detail, demoToken) {
+			t.Errorf("mock-server event %q disclosed the SAML token", event.Event)
+		}
 	}
 }

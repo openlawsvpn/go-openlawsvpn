@@ -4,6 +4,7 @@ Pure-Go OpenVPN3 client protocol implementation — AWS Client VPN + SAML/CRV1 f
 
 Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 `gomobile bind` produces an `.aar` for Android without NDK or CMake.
+See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes.
 
 ## Status
 
@@ -12,6 +13,11 @@ gomobile `.aar`). Find the current release with
 `git tag --list 'v*' --sort=-v:refname | head -1`. The `.aar` build pipeline is in
 `.github/workflows/aar.yml`; RPMs are built by COPR `vorona/openlawsvpn`;
 Arch Linux packages on AUR as `openlawsvpn`.
+
+> **AWS support boundary:** AWS documents SAML-based Client VPN connections as
+> supported only with the AWS-provided client. This repository implements the
+> compatible CRV1 wire flow as an unsupported third-party client. Use the
+> AWS-provided client when AWS-supported operation is required.
 
 ### Components
 
@@ -41,8 +47,13 @@ sudo ./openlawsvpn-cli -config your.ovpn
 
 # Add "verb 4" to the profile to log the verified server certificate.
 
-# Relay agent mode (CI/CD headless auth)
-sudo ./openlawsvpn-cli -relay <org-token> -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
+# Public relay demo.
+sudo ./openlawsvpn-cli -relay default -daemon \
+  -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
+
+# Private relay token (CI/CD headless auth); token file must be mode 0600.
+sudo ./openlawsvpn-cli -relay-token-file /run/user/$UID/openlawsvpn-relay-token \
+  -daemon -logfile /tmp/vpn.log -pidfile /tmp/vpn.pid
 
 # Android .aar (requires gomobile + Android NDK)
 gomobile bind -o go-openlawsvpn.aar -target android -androidapi 31 \
@@ -112,7 +123,7 @@ go test -v -tags=integration -timeout 120s .
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| **CI** (`ci.yml`) | push / PR to `main` | verifies release versions agree, then runs `go build`, `go test -race`, `go vet` |
+| **CI** (`ci.yml`) | push / PR to `main` | checks Rust dependency licenses and verifies release versions, Go builds, race tests, and vet |
 | **Build AAR** (`aar.yml`) | push tag `v*` or manual | builds `go-openlawsvpn.aar` via `gomobile bind`, publishes GitHub Release, opens a version-bump PR on `openlawsvpn-android-go` |
 | **Release** (`release.yml`) | push tag `v*` or manual | builds static `cli` + `daemon` binaries for amd64 / arm64 / ppc64le, attaches them to the GitHub Release |
 | **VPN Integration** (`vpn-integration.yml`) | manual | integration run against a live endpoint |
@@ -127,7 +138,8 @@ PKGBUILD. The Cargo manifest controls the version displayed by the GUI.
 
 ```bash
 scripts/bump-version.sh X.Y.Z
-# Add the matching entry to packaging/openlawsvpn.spec's %changelog.
+# Move CHANGELOG.md's Unreleased entries to X.Y.Z and add a new Unreleased section.
+# Add a concise matching entry to packaging/openlawsvpn.spec's %changelog.
 make check-version
 git diff --check
 # Commit the complete version bump before tagging it.

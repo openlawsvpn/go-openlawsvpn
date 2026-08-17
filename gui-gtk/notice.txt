@@ -1,6 +1,12 @@
 Open Source Notices
 ===================
 
+RPM and Arch packages also install LICENSE.dependencies, generated from the
+exact Rust dependency graph used for that package build. That inventory lists
+every resolved crate version and its declared license expression. This file is
+a curated summary of the principal components; the corresponding source and
+license texts remain authoritative.
+
 go-openlawsvpn (protocol engine + daemon)
 ------------------------------------------
 License:  LGPL-2.1-or-later with usage exception
@@ -9,9 +15,9 @@ Source:   https://github.com/openlawsvpn/go-openlawsvpn
 The usage exception permits using this library in proprietary products
 without source-release obligations for your application code.
 
-GTK4 / libadwaita
------------------
-License: LGPL-2.1-or-later
+GTK4 / libadwaita and Rust bindings
+-----------------------------------
+License: LGPL-2.1-or-later (native libraries); MIT (Rust bindings)
 Source:  https://gtk.org / https://gitlab.gnome.org/GNOME/libadwaita
 
 zbus
@@ -21,7 +27,7 @@ Source:  https://github.com/dbus2/zbus
 
 reqwest
 -------
-License: MIT / Apache-2.0
+License: MIT OR Apache-2.0
 Source:  https://github.com/seanmonstar/reqwest
 
 tokio
@@ -31,10 +37,25 @@ Source:  https://github.com/tokio-rs/tokio
 
 serde / serde_json
 ------------------
-License: MIT / Apache-2.0
+License: MIT OR Apache-2.0
 Source:  https://github.com/serde-rs/serde
 
 uuid
 ----
-License: Apache-2.0
+License: Apache-2.0 OR MIT
 Source:  https://github.com/uuid-rs/uuid
+
+log / env_logger
+----------------
+License: MIT OR Apache-2.0
+Source:  https://github.com/rust-lang/log / https://github.com/rust-cli/env_logger
+
+futures-channel / futures-util
+-------------------------------
+License: MIT OR Apache-2.0
+Source:  https://github.com/rust-lang/futures-rs
+
+native-tls / OpenSSL
+--------------------
+License: MIT OR Apache-2.0 (native-tls); Apache-2.0 (OpenSSL and Rust bindings)
+Source:  https://github.com/rust-native-tls/rust-native-tls / https://openssl.org

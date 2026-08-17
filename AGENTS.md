@@ -43,7 +43,9 @@ in-tree version fields and verifies that they agree:
 - `gui-gtk/Cargo.toml` — `version =` (controls what the About/Legal screens show)
 - `packaging/PKGBUILD` — `pkgver=`
 
-After running the script, add a `%changelog` entry in `packaging/openlawsvpn.spec`
+After running the script, move the entries under `Unreleased` in `CHANGELOG.md`
+to the new version and date, then create a fresh empty `Unreleased` section.
+Add a concise matching `%changelog` entry in `packaging/openlawsvpn.spec`
 manually (RPM changelog format requires a date and author line), then run
 `make check-version` again before committing or tagging. Do not create a
 release tag if this check fails. COPR does **not** auto-pick new tags — the
@@ -101,7 +103,7 @@ Phase 1:
   (AWS hardcodes ACS URL to 127.0.0.1:35001)
 
 Phase 2:
-  Client → Server: new TLS session with username="CRV1::<state_id>::<saml_token>"
+  Client → Server: new TLS session with key-method password="CRV1::<state_id>::<saml_token>"
   Server → Client: PUSH_REPLY with ifconfig, route, etc.
   Tunnel is up.
 ```
@@ -224,7 +226,6 @@ go-openlawsvpn/
     mssfix/         — software TCP MSS clamping (SYN/SYN-ACK rewrite)
   mock/mockserver/  — pure-Go mock OpenVPN3 server (no openvpn3-core dependency)
   testenv/          — integration test harness (starts mock server in-process)
-  testdata/         — test .ovpn profile
   cmd/cli/          — Linux CLI with SAML flow and reconnect loop
   cmd/daemon/       — D-Bus system service (used by GTK GUI)
   cmd/relay-server/ — relay server binary

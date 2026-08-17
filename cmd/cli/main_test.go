@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -29,6 +30,91 @@ func TestOutboundIPReturnsNonLoopback(t *testing.T) {
 	}
 	if parsed.IsUnspecified() {
 		t.Errorf("outboundIP returned unspecified address %q", ip)
+	}
+}
+
+func TestResolveSecretFromRestrictedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte("CANARY_SECRET\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveSecret("test secret", "", path, -1, 1024, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "CANARY_SECRET" {
+		t.Fatalf("secret = %q", got)
+	}
+}
+
+func TestResolveSecretRejectsOpenPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte("CANARY_SECRET\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveSecret("test secret", "", path, -1, 1024, false)
+	if err == nil || !strings.Contains(err.Error(), "permissions") {
+		t.Fatalf("expected permissions error, got %v", err)
+	}
+}
+
+func TestResolveSecretFromFileDescriptor(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	go func() {
+		_, _ = io.WriteString(w, "CANARY_FROM_FD\n")
+		_ = w.Close()
+	}()
+	got, err := resolveSecret("test secret", "", "", int(r.Fd()), 1024, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "CANARY_FROM_FD" {
+		t.Fatalf("secret = %q", got)
+	}
+}
+
+func TestResolveSecretRejectsMultipleSources(t *testing.T) {
+	_, err := resolveSecret("test secret", "literal", "path", -1, 1024, false)
+	if err == nil {
+		t.Fatal("expected multiple-source error")
+	}
+}
+
+func TestResolveRelayLiteralCompatibility(t *testing.T) {
+	got, err := resolveSecret("relay token", "default", "", -1, 1024, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "default" {
+		t.Fatalf("relay token = %q", got)
+	}
+}
+
+func TestDaemonAllowsRelayLiteral(t *testing.T) {
+	if err := validateDaemonSecretSources("", "default", -1, -1); err != nil {
+		t.Fatalf("public relay selector rejected in daemon mode: %v", err)
+	}
+	if err := validateDaemonSecretSources("", "private-org-token", -1, -1); err != nil {
+		t.Fatalf("private relay token rejected in daemon mode: %v", err)
+	}
+}
+
+func TestDaemonRejectsNonReexecutableSecretSources(t *testing.T) {
+	if err := validateDaemonSecretSources("saml-assertion", "", -1, -1); err == nil {
+		t.Fatal("daemon mode accepted a SAML assertion in argv")
+	}
+	if err := validateDaemonSecretSources("", "", -1, 0); err == nil {
+		t.Fatal("daemon mode accepted a relay token file descriptor")
 	}
 }
 

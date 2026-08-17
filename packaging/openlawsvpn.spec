@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.2.1
+Version:        1.2.2
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -167,7 +167,7 @@ exit 0
 %{_presetdir}/90-openlawsvpn.preset
 
 %files gui
-%license gui-gtk/LICENSE.dependencies
+%license gui-gtk/LICENSE.dependencies gui-gtk/notice.txt
 %{_bindir}/openlawsvpn-gui
 %{_datadir}/applications/openlawsvpn-gui.desktop
 %{_datadir}/icons/hicolor/scalable/apps/openlawsvpn-disconnected.svg
@@ -197,6 +197,14 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Mon Aug 17 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.2-1
+- security: harden SAML credential handling, ACS validation, logging, and
+  terminal teardown while preserving relay-token compatibility
+- cli: add protected file and file-descriptor credential inputs
+- license: validate Rust dependency licenses and ship generated dependency
+  inventories with curated GUI notices
+- cleanup: remove superseded mock and packaging artifacts
+
 * Thu Jul 30 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.1-1
 - feat(vpn): support `auth-federate` AWS SAML profiles
 - fix(vpn): honor configured tunnel MTUs and apply OpenVPN 2-compatible

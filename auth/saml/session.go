@@ -23,7 +23,7 @@ func HandlePhase1(r io.Reader) (*ControlMessage, error) {
 		return nil, fmt.Errorf("saml: Phase1 read: %w", err)
 	}
 	if cm.Kind == MsgKindAuthFailed {
-		return cm, fmt.Errorf("saml: Phase1 auth failed: %s", cm.Raw)
+		return cm, fmt.Errorf("saml: Phase1 authentication rejected")
 	}
 	return cm, nil
 }
@@ -40,8 +40,8 @@ func HandlePhase1(r io.Reader) (*ControlMessage, error) {
 // On failure (AUTH_FAILED), an error is returned; if sessionActive is true the
 // error is a *SessionExpiredError.
 func CompletePhase2(rw io.ReadWriter, stateID, samlToken string, sessionActive bool) (*ControlMessage, error) {
-	username := BuildPhase2Username(stateID, samlToken)
-	if err := WritePhase2Credentials(rw, username); err != nil {
+	credential := BuildPhase2Password(stateID, samlToken)
+	if err := WritePhase2Credential(rw, credential); err != nil {
 		return nil, err
 	}
 
@@ -72,12 +72,12 @@ func ParsePhase2Credential(msg string) (stateID, samlToken string, err error) {
 	msg = strings.TrimRight(msg, "\x00")
 	const prefix = "AUTH_REPLY,CRV1::"
 	if !strings.HasPrefix(msg, prefix) {
-		return "", "", fmt.Errorf("saml: ParsePhase2Credential: not an AUTH_REPLY,CRV1 message: %q", msg)
+		return "", "", fmt.Errorf("saml: ParsePhase2Credential: not an AUTH_REPLY,CRV1 message")
 	}
 	rest := msg[len(prefix):]
 	sepIdx := strings.Index(rest, "::")
 	if sepIdx < 0 {
-		return "", "", fmt.Errorf("saml: ParsePhase2Credential: missing '::' in credential: %q", msg)
+		return "", "", fmt.Errorf("saml: ParsePhase2Credential: missing '::' in credential")
 	}
 	stateID = rest[:sepIdx]
 	samlToken = rest[sepIdx+2:]

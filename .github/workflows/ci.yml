@@ -7,6 +7,20 @@ on:
     branches: [main, dev]
 
 jobs:
+  rust-license-policy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check Rust dependency licenses
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          command-arguments: licenses
+          manifest-path: gui-gtk/Cargo.toml
+
   build-and-test:
     runs-on: ubuntu-latest
 

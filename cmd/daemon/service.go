@@ -47,9 +47,9 @@ type DaemonService struct {
 	profilePath string
 
 	// Active relay session — set after /execute succeeds, cleared on release.
-	relaySessionID  string
-	relayBaseURL    string
-	relayOrgToken   string
+	relaySessionID string
+	relayBaseURL   string
+	relayOrgToken  string
 }
 
 func newDaemonService(conn *dbus.Conn) *DaemonService {
@@ -100,7 +100,7 @@ func (d *DaemonService) Connect(profilePath, profileContent string) *dbus.Error 
 	// SAML: daemon runs the ACS server and emits SAMLRequired so the GUI opens
 	// the browser. This keeps port :35001 in the privileged daemon process.
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
-		log.Printf("saml: starting ACS server, SAML URL: %s", challenge.URL)
+		log.Printf("saml: starting ACS server")
 		acs, err := saml.NewACSServer()
 		if err != nil {
 			log.Printf("saml: ACS server error: %v", err)
@@ -296,7 +296,7 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 	captured := make(chan samlCapture, 1)
 
 	client.SAMLTokenFn = func(ctx context.Context, challenge vpn.SAMLChallenge) (string, error) {
-		log.Printf("relay saml: starting ACS server, URL: %s", challenge.URL)
+		log.Printf("relay saml: starting ACS server")
 		acs, err := saml.NewACSServer()
 		if err != nil {
 			return "", fmt.Errorf("relay: ACS server: %w", err)
