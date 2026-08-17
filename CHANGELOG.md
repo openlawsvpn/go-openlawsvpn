@@ -32,8 +32,8 @@ canonical project history.
 - Add CI policy validation for licenses declared by resolved Rust dependencies.
 - Generate and install the exact Rust dependency/license inventory for Arch
   GUI packages; RPM packages continue to generate it with `%cargo_license`.
-- Emit an engine warning that AWS supports SAML-based Client VPN authentication
-  only through the AWS-provided client.
+- Emit a one-time AWS SAML compatibility notice directing users to the AWS VPN
+  Client when AWS-supported operation is required.
 - Add credential-disclosure, ACS-validation, teardown, and relay CLI
   compatibility regression tests.
 

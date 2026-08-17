@@ -71,8 +71,8 @@ type SAMLChallenge struct {
 var ErrReauthRequired = fmt.Errorf("vpn: SAML re-authentication required: token rejected by server")
 
 // AWSSAMLUnsupportedNotice describes the AWS support boundary for this
-// third-party CRV1 implementation.
-const AWSSAMLUnsupportedNotice = "AWS supports SAML-based Client VPN authentication only with the AWS-provided client; this third-party CRV1 flow is unsupported by AWS"
+// independent CRV1 implementation.
+const AWSSAMLUnsupportedNotice = "This client is not AWS-supported for SAML Client VPN authentication. For AWS-supported operation, use the AWS VPN Client."
 
 // Stats is a snapshot of per-session traffic counters.
 type Stats struct {
@@ -385,7 +385,7 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	}
 	c.mu.Unlock()
 	if awsSSO {
-		c.emit(Event{Type: EventLog, Message: "vpn: warning: " + AWSSAMLUnsupportedNotice})
+		c.emit(Event{Type: EventLog, Message: "vpn: notice: " + AWSSAMLUnsupportedNotice})
 	}
 
 	host := c.prof.Remote

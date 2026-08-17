@@ -152,8 +152,8 @@ builddep: srpm
 
 ## Remove build artefacts
 clean:
-	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui
-	rm -rf rpmbuild gui-gtk/target bin/
+	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui cli
+	rm -rf rpmbuild rpm-results gui-gtk/target bin/
 
 ## Test the AUR PKGBUILD: runs makepkg inside an Arch Linux Podman container.
 ## Requires: podman (Fedora: sudo dnf install podman), internet access.
