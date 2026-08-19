@@ -70,6 +70,11 @@ type SAMLChallenge struct {
 // with a new Phase 1 session. The caller must run the full browser flow again.
 var ErrReauthRequired = fmt.Errorf("vpn: SAML re-authentication required: token rejected by server")
 
+// errPhase2CredentialsRejected identifies an AWS authentication rejection
+// while reconnecting with cached CRV1 credentials. It remains internal because
+// callers receive ErrReauthRequired instead.
+var errPhase2CredentialsRejected = errors.New("vpn: Phase 2 credentials rejected by server")
+
 // AWSSAMLUnsupportedNotice describes the AWS support boundary for this
 // independent CRV1 implementation.
 const AWSSAMLUnsupportedNotice = "This client is not AWS-supported for SAML Client VPN authentication. For AWS-supported operation, use the AWS VPN Client."
@@ -691,12 +696,18 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		if err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
+			if isPhase2CredentialsRejected(pushCM) {
+				return fmt.Errorf("vpn: Phase2 read PUSH_REPLY: %w", errPhase2CredentialsRejected)
+			}
 			return fmt.Errorf("vpn: Phase2 read PUSH_REPLY: %w", err)
 		}
 		if pushCM.Kind != saml.MsgKindPushReply {
 			rawConn2.Close()
 			err = fmt.Errorf("Phase2 expected PUSH_REPLY, got message kind %s", pushCM.Kind)
 			c.setDisconnected(err)
+			if isPhase2CredentialsRejected(pushCM) {
+				return fmt.Errorf("vpn: %w", errPhase2CredentialsRejected)
+			}
 			return fmt.Errorf("vpn: %w", err)
 		}
 		pushRaw = pushCM.Raw
@@ -1061,7 +1072,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		if err := c.connectPhase2(ctx, token); err != nil {
 			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
 				"vpn: reconnect attempt %d Phase 2 failed: %v", attempt, err)})
-			if strings.Contains(err.Error(), "AUTH_FAILED") {
+			if errors.Is(err, errPhase2CredentialsRejected) || strings.Contains(err.Error(), "AUTH_FAILED") {
 				// Server's CRV1 session expired. SAML token is bound to the
 				// original AuthnRequest and cannot be reused with a new session.
 				// Reset to stateNew so the caller can run a fresh Connect.
@@ -1079,6 +1090,12 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
+}
+
+// isPhase2CredentialsRejected reports whether the server's Phase 2 reply
+// shows that cached CRV1 credentials are no longer usable.
+func isPhase2CredentialsRejected(cm *saml.ControlMessage) bool {
+	return cm != nil && (cm.Kind == saml.MsgKindAuthFailed || cm.Kind == saml.MsgKindAuthFailedCRV1)
 }
 
 // reset returns the Client to a stateNew state so Connect can be called

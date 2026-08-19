@@ -398,6 +398,8 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 
 	tokenCh := make(chan string, 1)
 	errCh := make(chan error, 1)
+	stdinDone := make(chan struct{})
+	defer close(stdinDone)
 
 	go func() {
 		tok, err := acs.Wait(ctx)
@@ -408,23 +410,13 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 		tokenCh <- tok
 	}()
 
-	// Stdin loop: empty Enter = reopen URL, non-empty = pasted token.
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				fmt.Fprintf(os.Stderr, "\nopenlawsvpn-cli: reopening URL...\n  %s\n\n", challenge.URL)
-				openBrowser(challenge.URL, browserCmd)
-				continue
-			}
-			select {
-			case tokenCh <- line:
-			default:
-			}
-			return
-		}
-	}()
+	// Stdin loop: empty Enter = reopen URL, non-empty = pasted token. It is
+	// stopped once ACS or context completion wins the race so later terminal
+	// input cannot reopen an expired URL.
+	go watchSAMLTokenInput(os.Stdin, stdinDone, func() {
+		fmt.Fprintf(os.Stderr, "\nopenlawsvpn-cli: reopening URL...\n  %s\n\n", challenge.URL)
+		openBrowser(challenge.URL, browserCmd)
+	}, tokenCh)
 
 	select {
 	case tok := <-tokenCh:
@@ -433,6 +425,36 @@ func waitForSAMLToken(ctx context.Context, challenge vpn.SAMLChallenge, browserC
 		return "", err
 	case <-ctx.Done():
 		return "", fmt.Errorf("openlawsvpn-cli: SAML wait cancelled: %w", ctx.Err())
+	}
+}
+
+// watchSAMLTokenInput forwards a pasted SAML token or invokes onEmpty for an
+// empty line. Closing done disables it without closing the process's stdin.
+func watchSAMLTokenInput(r io.Reader, done <-chan struct{}, onEmpty func(), tokenCh chan<- string) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		line := scanner.Text()
+		if line == "" {
+			select {
+			case <-done:
+				return
+			default:
+				onEmpty()
+			}
+			continue
+		}
+
+		select {
+		case tokenCh <- line:
+		case <-done:
+		}
+		return
 	}
 }
 

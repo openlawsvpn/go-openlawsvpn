@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.2.2
+Version:        1.2.3
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,13 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Wed Aug 19 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.3-1
+- fix(vpn): require fresh SAML authentication when AWS rejects cached CRV1
+  credentials after a network interruption
+- fix(cli): stop the temporary SAML stdin listener after ACS authentication
+- note(vpn): short interruptions may retain tun0 and resume without SAML when
+  AWS keeps the active session alive
+
 * Mon Aug 17 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.2-1
 - security: harden SAML credential handling, ACS validation, logging, and
   terminal teardown while preserving relay-token compatibility

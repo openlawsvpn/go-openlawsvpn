@@ -61,6 +61,20 @@ func TestTransientDisconnectPreservesCredentialsForReconnect(t *testing.T) {
 	}
 }
 
+func TestIsPhase2CredentialsRejected(t *testing.T) {
+	for _, kind := range []saml.MsgKind{saml.MsgKindAuthFailed, saml.MsgKindAuthFailedCRV1} {
+		if !isPhase2CredentialsRejected(&saml.ControlMessage{Kind: kind}) {
+			t.Errorf("kind %s was not classified as a rejected Phase 2 credential", kind)
+		}
+	}
+	if isPhase2CredentialsRejected(&saml.ControlMessage{Kind: saml.MsgKindPushReply}) {
+		t.Error("PUSH_REPLY was classified as a rejected Phase 2 credential")
+	}
+	if isPhase2CredentialsRejected(nil) {
+		t.Error("nil control message was classified as a rejected Phase 2 credential")
+	}
+}
+
 func TestSetupFailureClearsCredentials(t *testing.T) {
 	c := securityTestClient(t)
 	c.setDisconnected(assertionError("setup failed"))

@@ -8,6 +8,23 @@ canonical project history.
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-08-19
+
+### Fixed
+
+- Detect AWS Client VPN's normalized Phase 2 authentication rejection after a
+  network interruption and require a fresh SAML flow instead of retrying the
+  cached CRV1 credentials indefinitely.
+- Stop the CLI's temporary SAML stdin listener after ACS authentication
+  completes, preventing later Enter presses from reopening a stale SAML URL.
+
+### Compatibility
+
+- Brief network interruptions that do not cause AWS to terminate the active
+  session can retain the existing TUN interface and tunnel routes, so access
+  resumes without a new SAML flow. This is an observed effect of the existing
+  liveness/reconnect handling, not a guaranteed AWS session-resumption feature.
+
 ## [1.2.2] - 2026-08-17
 
 ### Security
@@ -95,7 +112,8 @@ canonical project history.
 - Configure full and split DNS for VPC-private resources on iOS.
 - Refresh the GTK profile list immediately after deleting a profile.
 
-[Unreleased]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.3...HEAD
+[1.2.3]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.1.9...v1.2.0

@@ -153,6 +153,50 @@ func TestNotifyReadyNoop(t *testing.T) {
 	notifyReady(0, "1.2.3.4") // must not panic or block
 }
 
+func TestWatchSAMLTokenInput(t *testing.T) {
+	done := make(chan struct{})
+	tokenCh := make(chan string, 1)
+	emptyCh := make(chan struct{}, 1)
+
+	watchSAMLTokenInput(strings.NewReader("\nTOKEN\n"), done, func() {
+		emptyCh <- struct{}{}
+	}, tokenCh)
+
+	select {
+	case <-emptyCh:
+	default:
+		t.Fatal("empty input did not invoke callback")
+	}
+	select {
+	case token := <-tokenCh:
+		if token != "TOKEN" {
+			t.Fatalf("token = %q, want TOKEN", token)
+		}
+	default:
+		t.Fatal("pasted token was not forwarded")
+	}
+}
+
+func TestWatchSAMLTokenInputStopsAfterDone(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	tokenCh := make(chan string, 1)
+	emptyCalled := false
+
+	watchSAMLTokenInput(strings.NewReader("\nTOKEN\n"), done, func() {
+		emptyCalled = true
+	}, tokenCh)
+
+	if emptyCalled {
+		t.Fatal("empty input callback ran after done")
+	}
+	select {
+	case token := <-tokenCh:
+		t.Fatalf("token %q was forwarded after done", token)
+	default:
+	}
+}
+
 // TestDaemonSpawnAndReady is an end-to-end test of the daemon re-exec mechanism.
 // It builds a helper binary that immediately signals "tunnel up" via
 // OPENLAWSVPN_READY_FD, simulating the child side of spawnDaemon.
