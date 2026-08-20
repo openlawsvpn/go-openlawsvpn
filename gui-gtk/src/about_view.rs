@@ -52,30 +52,8 @@ impl AboutView {
             dialog.set_license_type(gtk4::License::Lgpl21);
             dialog.set_developers(&["openlawsvpn contributors"]);
             dialog.add_legal_section(
-                "go-openlawsvpn",
-                Some(concat!(
-                    "LGPL-2.1-or-later with usage exception\n",
-                    "Version: ", env!("CARGO_PKG_VERSION"), "\n",
-                    "https://github.com/openlawsvpn/go-openlawsvpn",
-                )),
-                gtk4::License::Custom,
-                None,
-            );
-            dialog.add_legal_section(
-                "zbus",
-                Some("MIT — https://github.com/dbus2/zbus"),
-                gtk4::License::Custom,
-                None,
-            );
-            dialog.add_legal_section(
-                "GTK4 / libadwaita",
-                Some("LGPL-2.1 — https://gtk.org"),
-                gtk4::License::Custom,
-                None,
-            );
-            dialog.add_legal_section(
-                "reqwest / tokio / serde",
-                Some("MIT / Apache-2.0 — https://crates.io"),
+                "Open Source Notices",
+                Some(include_str!("../notice.txt")),
                 gtk4::License::Custom,
                 None,
             );

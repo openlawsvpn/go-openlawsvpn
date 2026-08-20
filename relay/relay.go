@@ -53,7 +53,9 @@ type Phase2Payload struct {
 
 // Config holds agent registration parameters.
 type Config struct {
-	// Token is the organisation token (--relay= flag value).
+	// Token is the organisation identifier/token used to register the agent.
+	// Private organisation tokens act as bearer credentials; "default" is the
+	// intentionally public demo organisation.
 	Token string
 	// Hostname is a human-readable label for this agent (defaults to os.Hostname).
 	Hostname string
@@ -381,7 +383,7 @@ func (w *wsConn) close() {
 // Reassembles fragmented messages (FIN=0 frames), handles control frames
 // (ping/pong/close), and skips empty data frames used as keepalives.
 func (w *wsConn) readMessage(ctx context.Context) ([]byte, error) {
-	var msg []byte    // accumulated message payload across fragments
+	var msg []byte     // accumulated message payload across fragments
 	var msgOpcode byte // opcode of the first fragment
 
 	for {

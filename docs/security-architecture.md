@@ -15,6 +15,11 @@ openlawsvpn splits VPN management into two cooperating processes:
 
 This document explains why the architecture is structured this way, what the privilege boundaries are, and what the design does and does not protect against.
 
+AWS documents SAML-based Client VPN authentication as supported only through
+the AWS-provided client. The CRV1 implementation described here is a compatible
+third-party implementation and is not an AWS-supported integration. The SAML
+assertion is necessarily sent in the OpenVPN key-method-2 password field.
+
 ---
 
 ## 1. Privilege Model
@@ -120,7 +125,7 @@ DNS configuration via `resolvectl` touches the system-resolved database, which i
 | Asset | Location | Sensitivity |
 |---|---|---|
 | VPN profile (.ovpn) | `~/.local/share/openlawsvpn/*.ovpn` | High — contains CA cert, server endpoint |
-| SAML token | In-memory only (daemon goroutine) | High — short-lived credential for VPN server |
+| SAML token | In-memory only (ACS, client session, controlled reconnect cache) | High — short-lived credential for VPN server |
 | TUN device + routes | Kernel — destroyed on daemon exit | Medium — active session only |
 | D-Bus session | Session bus | Low — same-UID access only |
 
@@ -130,14 +135,14 @@ DNS configuration via `resolvectl` touches the system-resolved database, which i
 |---|---|---|---|
 | GUI compromise leading to network admin escalation | Local process that pwns the GUI | Yes | GUI holds no capabilities; `CAP_NET_ADMIN` lives only in the daemon |
 | Profile file exfiltration | Local process running as the same UID | Partial | Profiles are mode 0600, owned by the user. Same-UID attacker can still read them. |
-| SAML token theft | Local process running as the same UID | Yes | Token is never written to disk; lives only in the daemon goroutine's stack |
+| SAML token theft | Local process running as the same UID | Partial | Token is never written to disk or logs, but remains in Go-managed memory while required for the active session or controlled reconnect |
 | SAML token theft via port 35001 race | Process that binds 35001 before the daemon | Mitigated by design | `NewACSServer()` binds 35001 before emitting `SAMLRequired`; if bind fails, connect is aborted |
 | Malicious .ovpn profile routing traffic through attacker server | Attacker who can place a profile in the profile directory | No | Same as any VPN client; the user is responsible for profile provenance |
 | D-Bus method call from another UID | Process running as a different user | Yes | Session bus enforces same-UID restriction at the kernel/dbus-daemon level |
 | DNS hijacking via forged `SetLinkDNS` call | Local process running as the same UID | Partial | polkit `subject.active` check; a background process with the same UID but no active session cannot pass the polkit rule |
 | Privilege escalation via daemon exec | Any local process | Yes | `NoNewPrivileges=true`; daemon cannot exec setuid or cap-bearing binaries |
 | VPN server injecting malicious routes | Compromised VPN server | No | Daemon applies all PUSH_REPLY routes; route injection is a fundamental property of trusted VPN design |
-| SAML token replay | Attacker who captures the SAML POST | Partial | AWS tokens are short-lived (minutes); the ACS server shuts down immediately after receiving the first valid response |
+| SAML token replay | Attacker who captures the SAML POST | Partial | AWS tokens are short-lived; the ACS server accepts only bounded, well-formed SAML responses and shuts down after the first structurally valid response |
 | GUI reading profile files directly | Same-UID local process | Yes | GUI never accesses profile files; it passes profile paths to the daemon via D-Bus; the daemon validates paths |
 
 ### 3.3 Explicit non-protections
@@ -225,7 +230,7 @@ By keeping the ACS server inside the daemon, the SAML token is received directly
 1. If port 35001 is already occupied (by another process or a previous connection that did not clean up), the connect attempt fails immediately with a `saml: ACS listen: bind: address already in use` error — before the browser is opened and before the user has started the SAML flow.
 2. The early bind also closes the window for a race where a malicious process attempts to steal port 35001 between the moment the daemon decides to connect and the moment it actually listens. The listen call and the `SAMLRequired` signal emission are sequential in the same goroutine.
 
-Since only one VPN connection is allowed at a time (a second `Connect()` call returns `com.openlawsvpn.Daemon.Busy`), port 35001 is held only for the duration of the SAML flow. It is released by `srv.Close()` immediately after the first valid `SAMLResponse` POST is received.
+Since only one VPN connection is allowed at a time (a second `Connect()` call returns `com.openlawsvpn.Daemon.Busy`), port 35001 is held only for the duration of the SAML flow. It is released by `srv.Close()` immediately after the first bounded, base64-decodable, well-formed SAML protocol `Response` is received. AWS remains responsible for cryptographic signature, audience, and assertion-condition validation.
 
 ### 5.4 Residual risk: SAML token interception at the ACS port
 
@@ -300,11 +305,12 @@ SAML tokens (the `SAMLResponse` POST body) are handled as follows:
 
 1. Received by the ACS HTTP handler in the daemon process.
 2. Passed as a Go `string` return value from `ACSServer.Wait()` to `client.SAMLTokenFn`.
-3. Passed to `connectPhase2()` which constructs the Phase 2 TLS username string in memory.
-4. The username string is written to the TLS session and then goes out of scope. No explicit zeroization is performed (the Go GC is not guaranteed to zero memory).
-5. The token is never logged (the daemon logs only `"saml: token received (len=%d)"`), never emitted as a D-Bus signal, and never written to disk.
+3. Passed to `connectPhase2()`, which constructs the CRV1 key-method password in memory.
+4. Cached only while the active connection may require rekey or controlled transient reconnect. Explicit disconnect and terminal setup failure clear all logical references, including a server-issued `auth-token`.
+5. Temporary byte buffers used to build the authentication packet are cleared after the TLS write. Go strings and internal TLS buffers cannot be guaranteed to be physically zeroized by the runtime.
+6. The token is never logged (the daemon logs only `"saml: token received (len=%d)"`), never emitted as a D-Bus signal, and never written to disk.
 
-The `SAMLRequired` signal emits only the SAML URL (from the server's CRV1 challenge), not the token. The token flows only: ACS handler → daemon goroutine → TLS session.
+The `SAMLRequired` signal emits only the SAML URL (from the server's CRV1 challenge), not the token. The URL is not copied into generic state events or daemon logs. The token flows only: ACS handler → daemon goroutine → client credential cache → TLS session.
 
 ### 7.2 Profile private keys
 
@@ -354,5 +360,5 @@ The following mitigations are not currently implemented but are identified for f
 - **Seccomp-BPF filter** — restrict the daemon to the syscall subset it actually uses (socket, ioctl, read, write, sendmsg, recvmsg, futex, clone). Would prevent exploitation of kernel vulnerabilities via unexpected syscalls.
 - **Profile mode check** — `profile.ParsePath` should `os.Stat` the file and return an error if mode bits grant group or world read.
 - **D-Bus policy file** — add a session bus policy file under `/usr/share/dbus-1/session.d/` that restricts `Connect()` to the binary at `/usr/libexec/openlawsvpn-gui` and explicit allowlist callers. This is defense-in-depth against other same-UID processes calling the daemon.
-- **Token zeroization** — use a `sync.Pool`-backed byte slice for the SAML token and explicit `bytes.Fill` after use. The current `string` type makes zeroization impossible in standard Go.
+- **Stronger secret-memory isolation** — the public/mobile APIs currently require Go strings, which cannot be reliably zeroized. A future breaking API could use owned byte buffers and platform-specific locked memory, while still acknowledging copies made inside `crypto/tls`.
 - **Network namespace** — run the daemon in a restricted network namespace that only contains the loopback interface and the TUN device, preventing it from directly accessing host network interfaces beyond what it needs.

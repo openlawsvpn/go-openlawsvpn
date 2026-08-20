@@ -50,6 +50,9 @@ jobs:
             echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
+      - name: Verify package and release versions
+        run: bash scripts/check-version.sh "${{ steps.version.outputs.tag }}"
+
       - name: Build AAR
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/30.0.14904198

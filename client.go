@@ -70,6 +70,15 @@ type SAMLChallenge struct {
 // with a new Phase 1 session. The caller must run the full browser flow again.
 var ErrReauthRequired = fmt.Errorf("vpn: SAML re-authentication required: token rejected by server")
 
+// errPhase2CredentialsRejected identifies an AWS authentication rejection
+// while reconnecting with cached CRV1 credentials. It remains internal because
+// callers receive ErrReauthRequired instead.
+var errPhase2CredentialsRejected = errors.New("vpn: Phase 2 credentials rejected by server")
+
+// AWSSAMLUnsupportedNotice describes the AWS support boundary for this
+// independent CRV1 implementation.
+const AWSSAMLUnsupportedNotice = "This client is not AWS-supported for SAML Client VPN authentication. For AWS-supported operation, use the AWS VPN Client."
+
 // Stats is a snapshot of per-session traffic counters.
 type Stats struct {
 	// BytesSent is the total number of plaintext bytes sent through the tunnel.
@@ -119,11 +128,11 @@ func (s *controlSession) receiveControl(packetID uint32, payload []byte) {
 type state int
 
 const (
-	stateNew         state = iota // New() called, no connection
-	stateConnecting               // Connect / connectPhase1 / connectPhase2 in progress
-	stateTunnelUp                 // connectPhase2 completed, data channel running
-	stateDisconnecting            // Disconnect() called, teardown in progress
-	stateDisconnected             // fully torn down
+	stateNew           state = iota // New() called, no connection
+	stateConnecting                 // Connect / connectPhase1 / connectPhase2 in progress
+	stateTunnelUp                   // connectPhase2 completed, data channel running
+	stateDisconnecting              // Disconnect() called, teardown in progress
+	stateDisconnected               // fully torn down
 )
 
 // Client is a go-openlawsvpn VPN client.
@@ -137,11 +146,11 @@ type Client struct {
 	state state
 
 	// phase1 connection and TLS (retained across phases)
-	rawConn    net.Conn
-	tlsConn    *tls.Conn     // the underlying *tls.Conn for ConnectionState()
-	tlsRW      io.ReadWriter // used for control-message I/O (may wrap tlsConn)
-	challenge  *saml.Challenge
-	phase1IP   string // resolved IP from Phase 1 dial — reused verbatim in Phase 2
+	rawConn   net.Conn
+	tlsConn   *tls.Conn     // the underlying *tls.Conn for ConnectionState()
+	tlsRW     io.ReadWriter // used for control-message I/O (may wrap tlsConn)
+	challenge *saml.Challenge
+	phase1IP  string // resolved IP from Phase 1 dial — reused verbatim in Phase 2
 
 	// session identifiers for the reliable control channel
 	clientSID [8]byte
@@ -161,10 +170,10 @@ type Client struct {
 	recvExp uint32
 
 	// data channel
-	manager  *datachannel.Manager
-	peerID   uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
-	tunDev   *tun.Device
-	pushOpts *routing.PushOptions
+	manager    *datachannel.Manager
+	peerID     uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
+	tunDev     *tun.Device
+	pushOpts   *routing.PushOptions
 	dnsOpts    *dns.Config
 	dnsBackup  string
 	dnsBackend dns.Backend
@@ -203,6 +212,10 @@ type Client struct {
 	wg          sync.WaitGroup
 	doneErr     error
 	doneCh      chan struct{}
+	// clearCredentialsOnCleanup is set by an explicit caller-initiated
+	// Disconnect. Transient link failures preserve credentials only long enough
+	// for the controlled Reconnect path.
+	clearCredentialsOnCleanup bool
 
 	// SAMLTokenFn is called during Connect when the server issues a SAML/CRV1
 	// challenge. The callback must open challenge.URL in a browser, wait for
@@ -243,7 +256,7 @@ type Client struct {
 	cachedSAMLExpiry time.Time // zero means unknown/no expiry
 	// cachedStateID is the CRV1 state_id from the last successful Phase 1.
 	// Preserved across reconnects so Phase 2 can be skipped-to directly.
-	cachedStateID  string
+	cachedStateID string
 	// cachedPhase1IP is the server IP from the last successful Phase 1 dial.
 	// Preserved so Phase 2 reconnects hit the same backend instance.
 	cachedPhase1IP string
@@ -320,7 +333,9 @@ func (c *Client) Connect(ctx context.Context) error {
 		}
 		var token string
 		if challenge != nil {
-			c.emit(Event{Type: EventStateChanged, State: StateWaitingSAML, Message: challenge.URL})
+			// The callback carries the SAML URL through a typed value. Do not also
+			// place it in the generic state message, which consumers commonly log.
+			c.emit(Event{Type: EventStateChanged, State: StateWaitingSAML})
 			token, err = c.SAMLTokenFn(ctx, *challenge)
 			if err != nil {
 				c.emit(Event{Type: EventStateChanged, State: StateError, Message: err.Error()})
@@ -369,10 +384,14 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	c.state = stateConnecting
 	// Detect auth flow here so connectPhase2 (called separately on mobile)
 	// uses the correct wire format even when Connect() is bypassed.
-	if c.prof.DetectFlow() == profile.FlowAWSSSO {
+	awsSSO := c.prof.DetectFlow() == profile.FlowAWSSSO
+	if awsSSO {
 		c.awsFormat = true
 	}
 	c.mu.Unlock()
+	if awsSSO {
+		c.emit(Event{Type: EventLog, Message: "vpn: notice: " + AWSSAMLUnsupportedNotice})
+	}
 
 	host := c.prof.Remote
 	if c.prof.RandomHostname {
@@ -510,8 +529,9 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 	}
 
 	rawConn.Close()
-	c.setDisconnected(fmt.Errorf("unexpected server message: %s", cm.Raw))
-	return nil, fmt.Errorf("vpn: unexpected Phase1 server message: %s", cm.Raw)
+	err = fmt.Errorf("unexpected Phase1 server message kind: %s", cm.Kind)
+	c.setDisconnected(err)
+	return nil, fmt.Errorf("vpn: %w", err)
 }
 
 // connectPhase2 completes the VPN connection.
@@ -572,8 +592,9 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		}
 		if pushCM.Kind != saml.MsgKindPushReply {
 			c.rawConn.Close()
-			c.setDisconnected(fmt.Errorf("expected PUSH_REPLY, got: %s", pushCM.Raw))
-			return fmt.Errorf("vpn: unexpected message: %s", pushCM.Raw)
+			err = fmt.Errorf("expected PUSH_REPLY, got message kind %s", pushCM.Kind)
+			c.setDisconnected(err)
+			return fmt.Errorf("vpn: %w", err)
 		}
 		pushRaw = pushCM.Raw
 	} else {
@@ -593,7 +614,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		// Reuse the Phase 1 IP address directly to guarantee server affinity.
 		// AWS Client VPN binds the CRV1 state_id to a specific backend instance;
 		// re-resolving the hostname may route to a different instance → AUTH_FAILED.
-		crv1Password := "CRV1::" + ch.StateID + "::" + samlToken
+		crv1Password := saml.BuildPhase2Password(ch.StateID, samlToken)
 		host := c.phase1IP
 		if host == "" {
 			host = c.prof.Remote
@@ -675,12 +696,19 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		if err != nil {
 			rawConn2.Close()
 			c.setDisconnected(err)
+			if isPhase2CredentialsRejected(pushCM) {
+				return fmt.Errorf("vpn: Phase2 read PUSH_REPLY: %w", errPhase2CredentialsRejected)
+			}
 			return fmt.Errorf("vpn: Phase2 read PUSH_REPLY: %w", err)
 		}
 		if pushCM.Kind != saml.MsgKindPushReply {
 			rawConn2.Close()
-			c.setDisconnected(fmt.Errorf("expected PUSH_REPLY, got: %s", pushCM.Raw))
-			return fmt.Errorf("vpn: Phase2 unexpected message: %s", pushCM.Raw)
+			err = fmt.Errorf("Phase2 expected PUSH_REPLY, got message kind %s", pushCM.Kind)
+			c.setDisconnected(err)
+			if isPhase2CredentialsRejected(pushCM) {
+				return fmt.Errorf("vpn: %w", errPhase2CredentialsRejected)
+			}
+			return fmt.Errorf("vpn: %w", err)
 		}
 		pushRaw = pushCM.Raw
 	}
@@ -896,9 +924,21 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 // It signals the background goroutines to stop and begins cleaning up.
 // Call Wait to block until teardown completes.
 func (c *Client) Disconnect() error {
+	return c.disconnect(false)
+}
+
+// disconnect tears down the active transport. Internal transient-failure paths
+// may preserve credentials for Reconnect; public Disconnect never does.
+func (c *Client) disconnect(preserveCredentials bool) error {
 	c.mu.Lock()
+	if !preserveCredentials {
+		c.clearCredentialsOnCleanup = true
+	}
 	st := c.state
 	if st == stateDisconnecting || st == stateDisconnected {
+		if st == stateDisconnected && !preserveCredentials {
+			c.clearCredentialsLocked()
+		}
 		c.mu.Unlock()
 		return nil
 	}
@@ -918,6 +958,9 @@ func (c *Client) Disconnect() error {
 		c.wg.Wait()
 		c.cleanup()
 		c.mu.Lock()
+		if c.clearCredentialsOnCleanup {
+			c.clearCredentialsLocked()
+		}
 		c.state = stateDisconnected
 		c.mu.Unlock()
 		c.emit(Event{Type: EventStateChanged, State: StateIdle})
@@ -1002,7 +1045,7 @@ func (c *Client) Reconnect(ctx context.Context) error {
 			}
 		}
 
-		c.Disconnect() //nolint:errcheck
+		c.disconnect(true)    //nolint:errcheck
 		c.WaitForDisconnect() //nolint:errcheck
 		c.reset()
 
@@ -1029,11 +1072,11 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		if err := c.connectPhase2(ctx, token); err != nil {
 			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
 				"vpn: reconnect attempt %d Phase 2 failed: %v", attempt, err)})
-			if strings.Contains(err.Error(), "AUTH_FAILED") {
+			if errors.Is(err, errPhase2CredentialsRejected) || strings.Contains(err.Error(), "AUTH_FAILED") {
 				// Server's CRV1 session expired. SAML token is bound to the
 				// original AuthnRequest and cannot be reused with a new session.
 				// Reset to stateNew so the caller can run a fresh Connect.
-				c.Disconnect() //nolint:errcheck
+				c.disconnect(false)   //nolint:errcheck
 				c.WaitForDisconnect() //nolint:errcheck
 				c.reset()
 				return ErrReauthRequired
@@ -1047,6 +1090,12 @@ func (c *Client) Reconnect(ctx context.Context) error {
 		c.mu.Unlock()
 		return nil
 	}
+}
+
+// isPhase2CredentialsRejected reports whether the server's Phase 2 reply
+// shows that cached CRV1 credentials are no longer usable.
+func isPhase2CredentialsRejected(cm *saml.ControlMessage) bool {
+	return cm != nil && (cm.Kind == saml.MsgKindAuthFailed || cm.Kind == saml.MsgKindAuthFailedCRV1)
 }
 
 // reset returns the Client to a stateNew state so Connect can be called
@@ -1075,8 +1124,9 @@ func (c *Client) reset() {
 	c.serverBypassGW = nil
 	c.phase1IP = ""
 	c.connectedAt = time.Time{}
-	// cachedSAMLToken, cachedSAMLExpiry, cachedStateID, cachedPhase1IP are
-	// intentionally NOT reset — they survive reconnects.
+	// Cached credentials intentionally survive this internal reset while
+	// Reconnect is in progress. Explicit Disconnect and terminal setup failure
+	// clear them before returning control to the caller.
 	c.cancelFn = nil
 	c.doneErr = nil
 	c.doneCh = make(chan struct{})
@@ -1086,6 +1136,7 @@ func (c *Client) reset() {
 	c.bytesRecv.Store(0)
 	c.lastRecv.Store(0)
 	c.tlsSecrets = nil
+	c.clearCredentialsOnCleanup = false
 }
 
 // ResetForTest resets the client to stateConnecting with the given SAML
@@ -1266,6 +1317,7 @@ const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=3
 //	[uint16_be(len+1)][peer_info\0]
 func sendAuthPacket(w io.Writer, proto profile.Proto, tunMTU int, username, password string, awsFormat bool) error {
 	var body []byte
+	defer func() { clear(body) }()
 
 	// key_method byte
 	body = append(body, 0x02)
@@ -1295,7 +1347,9 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, tunMTU int, username, pass
 		// Prepend total length as uint32_le.
 		totalLen := uint32(4 + len(body))
 		buf := []byte{byte(totalLen), byte(totalLen >> 8), byte(totalLen >> 16), byte(totalLen >> 24)}
-		_, err := w.Write(append(buf, body...))
+		packet := append(buf, body...)
+		_, err := w.Write(packet)
+		clear(packet)
 		return err
 	}
 
@@ -1316,7 +1370,9 @@ func sendAuthPacket(w io.Writer, proto profile.Proto, tunMTU int, username, pass
 
 	// Stock header: literal 4-byte zero prefix.
 	buf := []byte{0x00, 0x00, 0x00, 0x00}
-	_, err := w.Write(append(buf, body...))
+	packet := append(buf, body...)
+	_, err := w.Write(packet)
+	clear(packet)
 	return err
 }
 
@@ -1937,7 +1993,7 @@ func (c *Client) tunToWire(ctx context.Context) {
 				c.doneErr = fmt.Errorf("vpn: tunToWire: write error: %w", werr)
 			}
 			c.mu.Unlock()
-			c.Disconnect() //nolint:errcheck
+			c.disconnect(true) //nolint:errcheck
 			return
 		}
 		c.bytesSent.Add(uint64(n))
@@ -2064,7 +2120,7 @@ func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart in
 						c.doneErr = fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", pingRestart)
 					}
 					c.mu.Unlock()
-					c.Disconnect() //nolint:errcheck
+					c.disconnect(true) //nolint:errcheck
 					return
 				}
 			}
@@ -2114,7 +2170,7 @@ func (c *Client) inactiveLoop(ctx context.Context, timeout, minBytes int) {
 					c.doneErr = fmt.Errorf("vpn: inactive timeout: no traffic for %d seconds", timeout)
 				}
 				c.mu.Unlock()
-				c.Disconnect() //nolint:errcheck
+				c.disconnect(true) //nolint:errcheck
 				return
 			}
 
@@ -2370,7 +2426,7 @@ func (c *Client) rekeyAuthCredentials() (username, password string) {
 		return "N/A", c.pushOpts.AuthToken
 	}
 	if c.cachedStateID != "" && c.cachedSAMLToken != "" {
-		return "N/A", "CRV1::" + c.cachedStateID + "::" + c.cachedSAMLToken
+		return "N/A", saml.BuildPhase2Password(c.cachedStateID, c.cachedSAMLToken)
 	}
 	return "", ""
 }
@@ -2486,7 +2542,7 @@ func (c *Client) sessionMonitor(ctx context.Context) {
 			c.doneErr = err
 		}
 		c.mu.Unlock()
-		c.Disconnect() //nolint:errcheck
+		c.disconnect(true) //nolint:errcheck
 	}
 }
 
@@ -2531,6 +2587,22 @@ func (c *Client) cleanup() {
 	}
 }
 
+// clearCredentialsLocked removes logical references to authentication
+// material. Go strings cannot be reliably zeroized, so callers must also avoid
+// retaining extra copies and must never serialize these values into logs.
+// c.mu must be held.
+func (c *Client) clearCredentialsLocked() {
+	c.cachedSAMLToken = ""
+	c.cachedSAMLExpiry = time.Time{}
+	c.cachedStateID = ""
+	c.cachedPhase1IP = ""
+	c.challenge = nil
+	if c.pushOpts != nil {
+		c.pushOpts.AuthToken = ""
+	}
+	c.tlsSecrets = nil
+}
+
 // setDisconnected moves the client to the disconnected state and closes doneCh.
 func (c *Client) setDisconnected(err error) {
 	c.mu.Lock()
@@ -2542,6 +2614,9 @@ func (c *Client) setDisconnected(err error) {
 	if err != nil && c.doneErr == nil {
 		c.doneErr = err
 	}
+	// Connection-setup failures have no active session to reconnect. Do not
+	// retain an assertion cached before a failing Phase 2 attempt.
+	c.clearCredentialsLocked()
 	select {
 	case <-c.doneCh:
 	default:

@@ -22,10 +22,14 @@ endif
 RPM_OUTDIR   ?= $(shell pwd)/rpmbuild
 SPEC         := packaging/openlawsvpn.spec
 
-.PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
+.PHONY: all aar aar-sha256 cli build-macos-cli relay-server run-local-relay check-platforms check-version test lint clean daemon gui gui-release gui-deps rpm srpm builddep \
         build-bins test-integration-cli aur-build aur-test-gui aur-release check-aur-release
 
 all: aar
+
+## Verify that the RPM, AUR, and GUI versions agree.
+check-version:
+	bash scripts/check-version.sh
 
 ## Build the Android .aar
 aar: go-openlawsvpn.aar
@@ -123,7 +127,7 @@ gui-release:
 	cp gui-gtk/target/release/openlawsvpn-gui .
 
 ## Build the SRPM
-srpm:
+srpm: check-version
 	mkdir -p $(RPM_OUTDIR)/SRPMS
 	rm -rf $(RPM_OUTDIR)/SRPMS/*.src.rpm
 	rpkg srpm --spec $(SPEC) --outdir $(RPM_OUTDIR)/SRPMS
@@ -148,16 +152,16 @@ builddep: srpm
 
 ## Remove build artefacts
 clean:
-	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui
-	rm -rf rpmbuild gui-gtk/target bin/
+	rm -f go-openlawsvpn.aar go-openlawsvpn.aar.sha256 go-openlawsvpn-sources.jar openlawsvpn-cli relay-server openlawsvpn-daemon openlawsvpn-gui cli
+	rm -rf rpmbuild rpm-results gui-gtk/target bin/
 
 ## Test the AUR PKGBUILD: runs makepkg inside an Arch Linux Podman container.
 ## Requires: podman (Fedora: sudo dnf install podman), internet access.
-aur-build:
+aur-build: check-version
 	bash packaging/test-aur.sh
 
 ## Run the AUR build + GUI smoke test (Xvfb). Adds xorg-server-xvfb inside the container.
-aur-test-gui:
+aur-test-gui: check-version
 	bash packaging/test-aur.sh --gui
 
 ## Bump PKGBUILD to a new packaging release and regenerate .SRCINFO.
@@ -171,6 +175,7 @@ aur-release:
 	echo "Releasing pkgver=$$PKGVER pkgrel=$$PKGREL"; \
 	sed -i "s/^pkgver=.*/pkgver=$$PKGVER/" packaging/PKGBUILD; \
 	sed -i "s/^pkgrel=.*/pkgrel=$$PKGREL/" packaging/PKGBUILD; \
+	bash scripts/check-version.sh; \
 	echo "Downloading pkg/$$PKGVER-$$PKGREL tarball..."; \
 	SHA=$$(curl -fsSL "https://github.com/openlawsvpn/go-openlawsvpn/archive/refs/tags/pkg/$${PKGVER}-$${PKGREL}.tar.gz" | sha256sum | cut -d' ' -f1); \
 	sed -i "s/^sha256sums=.*/sha256sums=('$$SHA')/" packaging/PKGBUILD; \
@@ -184,7 +189,7 @@ aur-release:
 
 ## Verify the current PKGBUILD is consistent: pkg/ tag exists on remote and sha256 matches.
 ## Usage: make check-aur-release   (reads pkgver/pkgrel from packaging/PKGBUILD)
-check-aur-release:
+check-aur-release: check-version
 	@PKGVER=$$(grep '^pkgver=' packaging/PKGBUILD | cut -d= -f2); \
 	PKGREL=$$(grep '^pkgrel=' packaging/PKGBUILD | cut -d= -f2); \
 	EXPECTED=$$(grep '^sha256sums=' packaging/PKGBUILD | grep -o "'[^']*'" | tr -d "'"); \

@@ -1,9 +1,13 @@
 # Using openlawsvpn-cli relay mode in CI/CD pipelines
 
 `openlawsvpn-cli` relay mode lets a CI runner connect to an internal VPN network
-**without storing credentials in the pipeline**. The SAML auth flow runs on the
-operator's phone or desktop; the runner receives the completed tunnel credentials
-via the relay and brings the VPN up as a background daemon.
+without exposing its relay token in process arguments. The SAML auth flow runs on
+the operator's phone or desktop; the runner receives the completed tunnel
+credentials via the relay and brings the VPN up as a background daemon. The relay
+token is held in a mode-0600 temporary file and removed during job cleanup.
+The compatible `-relay <token>` form remains supported, including with
+`-daemon`. The public demo selector `-relay default` is intentionally safe to
+show; private organisation tokens should use the file form on shared systems.
 
 ---
 
@@ -12,7 +16,7 @@ via the relay and brings the VPN up as a background daemon.
 ```
 CI runner                       Relay (AWS)              Operator (phone/desktop)
 ─────────                       ───────────              ───────────────────────
-openlawsvpn-cli -relay <token>
+openlawsvpn-cli -relay-token-file <mode-0600-file>
   -daemon                ──WS──▶  relay.openlawsvpn.com  ◀──REST──  app lists agents
   prints: daemon started (pid N)                                      taps Connect
   pipeline continues immediately                                      SAML browser flow
@@ -41,8 +45,10 @@ The background daemon keeps the tunnel alive for the rest of the job.
   env:
     RELAY_TOKEN: ${{ secrets.RELAY_TOKEN }}
   run: |
+    install -m 600 /dev/null /tmp/openlawsvpn-relay-token
+    printf '%s\n' "$RELAY_TOKEN" > /tmp/openlawsvpn-relay-token
     sudo openlawsvpn-cli \
-      -relay "$RELAY_TOKEN" \
+      -relay-token-file /tmp/openlawsvpn-relay-token \
       -daemon \
       -pidfile /tmp/openlawsvpn.pid \
       -logfile /tmp/openlawsvpn.log
@@ -54,9 +60,11 @@ The background daemon keeps the tunnel alive for the rest of the job.
     HEALTH_URL: ${{ secrets.INTERNAL_HEALTH_URL }}
   run: curl -sf "$HEALTH_URL"
 
-- name: Disconnect VPN
+- name: Disconnect VPN and remove token file
   if: always()
-  run: sudo kill "$(cat /tmp/openlawsvpn.pid)" 2>/dev/null || true
+  run: |
+    sudo kill "$(cat /tmp/openlawsvpn.pid)" 2>/dev/null || true
+    rm -f /tmp/openlawsvpn-relay-token
 
 - name: Upload relay agent log
   if: always()
@@ -96,7 +104,9 @@ reached — always set a step-level timeout to get a clean failure.
 
 | Flag | Default | Description |
 |---|---|---|
-| `-relay <token>` | — | Org token; enables relay mode |
+| `-relay <token>` | — | Organisation identifier/token; `default` is the public demo selector |
+| `-relay-token-file <path>` | — | Read the org token from a mode-0600 file; enables relay mode |
+| `-relay-token-fd <fd>` | — | Read the org token from a descriptor; foreground mode only |
 | `-daemon` | false | Fork to background after tunnel up; foreground exits 0 |
 | `-pidfile <path>` | — | Write daemon PID here (for `kill` in cleanup step) |
 | `-logfile <path>` | /dev/null | Redirect daemon output here |

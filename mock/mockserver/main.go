@@ -16,7 +16,8 @@
 //	CERT_DIR                 — directory containing ca.crt server.crt server.key
 //	                           when unset, self-signed certs are generated in memory
 //	IDP_URL                  — base URL for the CRV1 login page (default: https://openlawsvpn.com/demo/login/)
-//	DEMO_TOKEN               — fixed token the login page POSTs to the ACS server (default: OPENLAWSVPN_DEMO_2026)
+//	DEMO_TOKEN               — fixed base64 SAMLResponse the login page POSTs to the ACS server
+//	                           (default: canonical minimal SAML protocol Response)
 package main
 
 import (
@@ -46,6 +47,10 @@ type event struct {
 	Event  string `json:"event"`
 	Detail string `json:"detail,omitempty"`
 }
+
+// defaultDemoSAMLResponse is the fixed, base64-encoded SAML protocol Response
+// used by the public demo. It is a compatibility fixture, not an assertion.
+const defaultDemoSAMLResponse = "PHNhbWxwOlJlc3BvbnNlIHhtbG5zOnNhbWxwPSJ1cm46b2FzaXM6bmFtZXM6dGM6U0FNTDoyLjA6cHJvdG9jb2wiIElEPSJvcGVubGF3c3Zwbi1kZW1vIj48L3NhbWxwOlJlc3BvbnNlPg=="
 
 func logEvent(name, detail string) {
 	e := event{
@@ -437,7 +442,7 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 	// ---- Auth packet exchange ----
 	// Order (openvpn3-core ssl/proto.hpp):
 	//   1. Client sends its auth packet first.
-	//   2. Server reads client auth packet and logs all fields in plaintext.
+	//   2. Server reads the client auth packet and logs only non-secret metadata.
 	//   3. Server sends its own auth packet in response.
 	authInfo, raw, err := readClientAuthPacket(tlsConn)
 	if err != nil {
@@ -445,7 +450,7 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		return
 	}
 	awsClient := len(raw) >= 4 && (int(raw[0])|int(raw[1])<<8|int(raw[2])<<16|int(raw[3])<<24) >= 85
-	logEvent("auth_packet_recv", authInfo)
+	logEvent("auth_packet_recv", authInfo.safeLog())
 
 	serverAuthPkt := buildServerAuthPacket(awsClient)
 	if _, err := tlsConn.Write(serverAuthPkt); err != nil {
@@ -467,8 +472,7 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 	if crv1 {
 		// CRV1 mode: Phase 1 — check whether this is a Phase 1 or Phase 2 connection
 		// by inspecting the password field already parsed above.
-		pwdPrefix := authInfoField(authInfo, "password_prefix")
-		if strings.HasPrefix(pwdPrefix, "CRV1::") {
+		if strings.HasPrefix(authInfo.password, "CRV1::") {
 			// This is a Phase 2 connection — validate stateID and send PUSH_REPLY.
 			// The stateID is embedded in the password: CRV1::<stateID>::<token>
 			handleCRV1Phase2(tlsConn, authInfo, remote)
@@ -507,11 +511,11 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 // handleCRV1Phase2 handles a Phase 2 connection in CRV1 mode.
 // The client has already sent its auth packet with password="CRV1::<stateID>::<token>".
 // We just validate the format and send PUSH_REPLY.
-func handleCRV1Phase2(tlsConn *tls.Conn, authInfo string, remote string) {
-	password := authInfoField(authInfo, "password")
+func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string) {
+	password := authInfo.password
 	const crv1Prefix = "CRV1::"
 	if !strings.HasPrefix(password, crv1Prefix) {
-		logEvent("crv1_phase2_error", "unexpected password format: "+password[:min(len(password), 40)])
+		logEvent("crv1_phase2_error", "unexpected password format")
 		tlsConn.Write([]byte("AUTH_FAILED\x00")) //nolint:errcheck
 		return
 	}
@@ -527,14 +531,14 @@ func handleCRV1Phase2(tlsConn *tls.Conn, authInfo string, remote string) {
 
 	demoToken := os.Getenv("DEMO_TOKEN")
 	if demoToken == "" {
-		demoToken = "DEMO2026OPENLAWS"
+		demoToken = defaultDemoSAMLResponse
 	}
 	if token != demoToken {
-		logEvent("crv1_phase2_rejected", fmt.Sprintf("state_id=%s bad_token_len=%d", stateID, len(token)))
+		logEvent("crv1_phase2_rejected", fmt.Sprintf("state_id_len=%d bad_token_len=%d", len(stateID), len(token)))
 		tlsConn.Write([]byte("AUTH_FAILED\x00")) //nolint:errcheck
 		return
 	}
-	logEvent("crv1_phase2_ok", fmt.Sprintf("state_id=%s", stateID))
+	logEvent("crv1_phase2_ok", fmt.Sprintf("state_id_len=%d", len(stateID)))
 
 	pushReply := buildPushReply()
 	if _, err := tlsConn.Write([]byte(pushReply)); err != nil {
@@ -588,7 +592,8 @@ func buildServerAuthPacket(awsFormat bool) []byte {
 }
 
 // readClientAuthPacket reads and parses the client's key-method-2 auth packet.
-// Returns a JSON-encoded summary string for logging, plus the raw bytes.
+// Returns the parsed fields plus the raw bytes. Call safeLog before logging;
+// the parsed password must never be serialized into diagnostics.
 //
 // Two wire formats are auto-detected from the 4-byte header:
 //
@@ -611,11 +616,11 @@ func buildServerAuthPacket(awsFormat bool) []byte {
 //	[uint16_be(len+1)][username\0]
 //	[uint16_be(len+1)][password\0]
 //	[uint16_be(len+1)][peer_info\0]
-func readClientAuthPacket(r io.Reader) (info string, raw []byte, err error) {
+func readClientAuthPacket(r io.Reader) (info clientAuthInfo, raw []byte, err error) {
 	// Read the 4-byte header — either LE total length (AWS) or 0x00000000 (stock).
 	hdr := make([]byte, 4)
 	if _, err := io.ReadFull(r, hdr); err != nil {
-		return "", nil, fmt.Errorf("read header: %w", err)
+		return clientAuthInfo{}, nil, fmt.Errorf("read header: %w", err)
 	}
 	totalLen := int(hdr[0]) | int(hdr[1])<<8 | int(hdr[2])<<16 | int(hdr[3])<<24
 
@@ -623,7 +628,7 @@ func readClientAuthPacket(r io.Reader) (info string, raw []byte, err error) {
 		// AWS format: hdr is uint32_le total packet length.
 		body := make([]byte, totalLen-4)
 		if _, err := io.ReadFull(r, body); err != nil {
-			return "", nil, fmt.Errorf("read body (totalLen=%d): %w", totalLen, err)
+			return clientAuthInfo{}, nil, fmt.Errorf("read body (totalLen=%d): %w", totalLen, err)
 		}
 		raw = append(hdr, body...)
 
@@ -650,7 +655,7 @@ func readClientAuthPacket(r io.Reader) (info string, raw []byte, err error) {
 	rest := make([]byte, 8192)
 	n, err2 := r.Read(rest)
 	if err2 != nil && n == 0 {
-		return "", nil, fmt.Errorf("read stock body: %w", err2)
+		return clientAuthInfo{}, nil, fmt.Errorf("read stock body: %w", err2)
 	}
 	body := rest[:n]
 	raw = append(hdr, body...)
@@ -672,48 +677,53 @@ func readClientAuthPacket(r io.Reader) (info string, raw []byte, err error) {
 	return buildAuthInfo(options, username, password, peerInfo, 4+n), raw, nil
 }
 
-// buildAuthInfo formats the parsed auth packet fields as a JSON string for logEvent.
-func buildAuthInfo(options, username, password, peerInfo string, totalBytes int) string {
-	pwdPrefix := password
-	if len(pwdPrefix) > 80 {
-		pwdPrefix = pwdPrefix[:80] + "..."
+type clientAuthInfo struct {
+	totalBytes int
+	options    string
+	username   string
+	password   string
+	peerInfo   string
+}
+
+func buildAuthInfo(options, username, password, peerInfo string, totalBytes int) clientAuthInfo {
+	return clientAuthInfo{
+		totalBytes: totalBytes,
+		options:    options,
+		username:   username,
+		password:   password,
+		peerInfo:   peerInfo,
 	}
-	// Encode as JSON object for structured parsing.
-	type authLog struct {
+}
+
+// safeLog returns structured auth metadata without credential values or
+// prefixes. The credential kind is sufficient for integration assertions.
+func (a clientAuthInfo) safeLog() string {
+	credentialKind := "other"
+	switch {
+	case a.password == "":
+		credentialKind = "empty"
+	case a.password == "ACS::35001":
+		credentialKind = "acs"
+	case strings.HasPrefix(a.password, "CRV1::"):
+		credentialKind = "crv1"
+	}
+	al := struct {
 		TotalBytes     int    `json:"total_bytes"`
 		Options        string `json:"options"`
 		Username       string `json:"username"`
-		Password       string `json:"password"`
 		PasswordLen    int    `json:"password_len"`
-		PasswordPrefix string `json:"password_prefix"`
+		CredentialKind string `json:"credential_kind"`
 		PeerInfo       string `json:"peer_info"`
-	}
-	al := authLog{
-		TotalBytes:     totalBytes,
-		Options:        options,
-		Username:       username,
-		Password:       password,
-		PasswordLen:    len(password),
-		PasswordPrefix: pwdPrefix,
-		PeerInfo:       peerInfo,
+	}{
+		TotalBytes:     a.totalBytes,
+		Options:        a.options,
+		Username:       a.username,
+		PasswordLen:    len(a.password),
+		CredentialKind: credentialKind,
+		PeerInfo:       a.peerInfo,
 	}
 	b, _ := json.Marshal(al)
 	return string(b)
-}
-
-// authInfoField extracts a named field from the JSON-encoded authInfo string.
-// Returns empty string if not found.
-func authInfoField(authInfo, field string) string {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(authInfo), &m); err != nil {
-		return ""
-	}
-	if v, ok := m[field]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
 }
 
 // parseAuthStr reads a uint32_be-length-prefixed NUL-terminated string from buf
@@ -848,10 +858,10 @@ func buildHardResetServer(serverSID, clientSID [8]byte) []byte {
 	var b []byte
 	b = append(b, byte(opcodeHardResetServerV2<<3))
 	b = append(b, serverSID[:]...)
-	b = append(b, 1)             // ack_array_len=1
-	b = append(b, 0, 0, 0, 0)   // ACK client packet 0
+	b = append(b, 1)               // ack_array_len=1
+	b = append(b, 0, 0, 0, 0)      // ACK client packet 0
 	b = append(b, clientSID[:]...) // remote_session_id
-	b = append(b, 0, 0, 0, 0)   // server packet_id=0
+	b = append(b, 0, 0, 0, 0)      // server packet_id=0
 	return b
 }
 
