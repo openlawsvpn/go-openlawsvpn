@@ -49,6 +49,14 @@ package_openlawsvpn-daemon() {
     install -Dm644 packaging/com.openlawsvpn.Daemon.service \
         "$pkgdir/usr/share/dbus-1/system-services/com.openlawsvpn.Daemon.service"
 
+    # Arch installs the daemon under /usr/lib/openlawsvpn/ (Arch does not use
+    # /usr/libexec), but the unit and D-Bus service are shared with the RPM
+    # packaging and hardcode %{_libexecdir}. Repoint both at the packaged
+    # location, otherwise systemd fails with status=203/EXEC.
+    sed -i 's|/usr/libexec/openlawsvpn-daemon|/usr/lib/openlawsvpn/openlawsvpn-daemon|' \
+        "$pkgdir/usr/lib/systemd/system/openlawsvpn-daemon.service" \
+        "$pkgdir/usr/share/dbus-1/system-services/com.openlawsvpn.Daemon.service"
+
     install -Dm644 packaging/10-openlawsvpn-dns.rules \
         "$pkgdir/usr/share/polkit-1/rules.d/10-openlawsvpn-dns.rules"
 
