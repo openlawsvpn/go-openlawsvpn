@@ -1,4 +1,8 @@
 # Maintainer: Anatolii Vorona <vorona.tolik@gmail.com>
+#
+# Release template for the official AUR package. `make aur-release` copies
+# this file into the aur-openlawsvpn repository.
+
 pkgbase=openlawsvpn
 pkgname=(openlawsvpn-daemon openlawsvpn-cli openlawsvpn-gui)
 pkgver=1.2.3
@@ -48,6 +52,18 @@ package_openlawsvpn-daemon() {
 
     install -Dm644 packaging/com.openlawsvpn.Daemon.service \
         "$pkgdir/usr/share/dbus-1/system-services/com.openlawsvpn.Daemon.service"
+
+    # Arch stores package-private executables under /usr/lib/$pkgbase, while
+    # these shared upstream service files use the RPM libexec path.
+    local daemon_path=/usr/lib/openlawsvpn/openlawsvpn-daemon
+    local systemd_service="$pkgdir/usr/lib/systemd/system/openlawsvpn-daemon.service"
+    local dbus_service="$pkgdir/usr/share/dbus-1/system-services/com.openlawsvpn.Daemon.service"
+    sed -i -e "s|^ExecStart=.*|ExecStart=$daemon_path|" "$systemd_service"
+    sed -i -e "s|^Exec=.*|Exec=$daemon_path|" "$dbus_service"
+
+    # Fail the package build if either upstream file changes unexpectedly.
+    grep -Fqx "ExecStart=$daemon_path" "$systemd_service"
+    grep -Fqx "Exec=$daemon_path" "$dbus_service"
 
     install -Dm644 packaging/10-openlawsvpn-dns.rules \
         "$pkgdir/usr/share/polkit-1/rules.d/10-openlawsvpn-dns.rules"
