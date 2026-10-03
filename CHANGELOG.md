@@ -23,6 +23,7 @@ canonical project history.
   fields.
 - Add a distinct `reauth_required` client state so applications can distinguish
   a fresh browser flow from an ordinary transport retry.
+- Add deduplicated route and DNS drift events for VPN-owned host configuration.
 
 ### Changed
 
@@ -42,6 +43,9 @@ canonical project history.
   credentials or starting multiple authentication flows.
 - Keep dynamic challenge payloads out of generic errors and session-expiry
   classifications.
+- Track exact route and DNS ownership per client, restore only missing owned
+  state, and preserve pre-existing routes or later administrator changes during
+  repair and teardown.
 
 ## [1.2.3] - 2026-08-19
 

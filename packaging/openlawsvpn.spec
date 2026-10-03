@@ -207,6 +207,10 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
   honor terminal ping-exit, and retain live TLS reads after PUSH_REPLY
 - security(auth): clear rejected SAML assertions before reconnect and
   deduplicate concurrent session-expiry outcomes
+- feat(network): emit deduplicated route and DNS drift events and restore only
+  missing state owned by the current VPN instance
+- fix(network): preserve pre-existing routes and later administrator DNS or
+  route changes during repair and disconnect cleanup
 
 * Wed Aug 19 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.3-1
 - fix(vpn): require fresh SAML authentication when AWS rejects cached CRV1

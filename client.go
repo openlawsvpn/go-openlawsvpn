@@ -177,13 +177,15 @@ type Client struct {
 	recvExp uint32
 
 	// data channel
-	manager    *datachannel.Manager
-	peerID     uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
-	tunDev     *tun.Device
-	pushOpts   *routing.PushOptions
-	dnsOpts    *dns.Config
-	dnsBackup  string
-	dnsBackend dns.Backend
+	manager        *datachannel.Manager
+	peerID         uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
+	tunDev         *tun.Device
+	pushOpts       *routing.PushOptions
+	dnsOpts        *dns.Config
+	dnsBackup      string
+	dnsBackend     dns.Backend
+	routeOwnership *routing.Ownership
+	dnsOwnership   *dns.Ownership
 	// dataCh receives P_DATA_V2 wire packets from the control-channel relay
 	// goroutine (which owns all reads from rawConn).  wireToTun drains it.
 	dataCh chan []byte
@@ -195,8 +197,9 @@ type Client struct {
 	mssFixMTU int
 	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
 	// when redirect-gateway is active, so cleanup can remove it on disconnect.
-	serverBypassIP net.IP
-	serverBypassGW net.IP
+	serverBypassIP    net.IP
+	serverBypassGW    net.IP
+	serverBypassOwned bool
 
 	// nextKeyID is the key_id for the next renegotiated TLS session.
 	// Incremented mod 8 after each renegotiation (key_id 0 is reserved for
@@ -924,6 +927,11 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	c.wg.Add(1)
 	go c.sessionMonitor(cctx)
 
+	if c.routeOwnership != nil || c.dnsOwnership != nil {
+		c.wg.Add(1)
+		go c.resourceMonitor(cctx)
+	}
+
 	return nil
 }
 
@@ -1141,8 +1149,11 @@ func (c *Client) reset() {
 	c.dnsOpts = nil
 	c.dnsBackup = ""
 	c.dnsBackend = dns.BackendNone
+	c.routeOwnership = nil
+	c.dnsOwnership = nil
 	c.serverBypassIP = nil
 	c.serverBypassGW = nil
+	c.serverBypassOwned = false
 	c.phase1IP = ""
 	c.connectedAt = time.Time{}
 	// Cached credentials intentionally survive this internal reset while
@@ -2723,6 +2734,78 @@ func (c *Client) sessionMonitorFor(ctx context.Context, rw io.Reader) {
 	}
 }
 
+func (c *Client) resourceMonitor(ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	reported := make(map[string]bool)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.checkResourceDrift(reported)
+		}
+	}
+}
+
+func (c *Client) checkResourceDrift(reported map[string]bool) {
+	if c.routeOwnership != nil {
+		drift, err := c.routeOwnership.Repair()
+		if err != nil {
+			c.emit(Event{Type: EventLog, Message: "vpn: route restoration failed"})
+		}
+		active := make(map[string]bool)
+		for _, item := range drift {
+			key := fmt.Sprintf("route:%d:%s", item.Kind, item.Destination)
+			active[key] = true
+			if !reported[key] {
+				c.emit(Event{Type: EventRouteDrift, Resource: item.Destination, Message: routeDriftName(item.Kind)})
+			}
+		}
+		for key := range reported {
+			if strings.HasPrefix(key, "route:") && !active[key] {
+				delete(reported, key)
+			}
+		}
+		for key := range active {
+			reported[key] = true
+		}
+	}
+	if c.dnsOwnership != nil {
+		kind, drifted, err := c.dnsOwnership.Repair()
+		if err != nil {
+			c.emit(Event{Type: EventLog, Message: "vpn: DNS restoration failed"})
+		}
+		key := fmt.Sprintf("dns:%d", kind)
+		if drifted && !reported[key] {
+			c.emit(Event{Type: EventDNSDrift, Resource: "dns", Message: dnsDriftName(kind)})
+			reported[key] = true
+		}
+		if !drifted {
+			for old := range reported {
+				if strings.HasPrefix(old, "dns:") {
+					delete(reported, old)
+				}
+			}
+		}
+	}
+}
+
+func routeDriftName(kind routing.DriftKind) string {
+	if kind == routing.DriftMissing {
+		return "missing"
+	}
+	return "changed"
+}
+
+func dnsDriftName(kind dns.DriftKind) string {
+	if kind == dns.DriftMissing {
+		return "missing"
+	}
+	return "changed"
+}
+
 // cleanup tears down the TUN interface, routes, DNS, and data channel.
 func (c *Client) cleanup() {
 	// Close the data channel so wireToTun exits.
@@ -2731,6 +2814,7 @@ func (c *Client) cleanup() {
 		c.dataCh = nil
 	}
 	if c.tunDev != nil {
+		hadRouteOwnership := c.routeOwnership != nil
 		// Capture names/indices before closing the device.
 		tunName := c.tunDev.Name()
 		var ifIndex int
@@ -2740,8 +2824,15 @@ func (c *Client) cleanup() {
 
 		// Revert DNS while the TUN interface still exists. This explicitly removes
 		// its systemd-resolved state rather than relying on link deletion.
-		if c.dnsOpts != nil {
+		if c.dnsOwnership != nil {
+			c.dnsOwnership.Cleanup() //nolint:errcheck
+			c.dnsOwnership = nil
+		} else if c.dnsOpts != nil {
 			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
+		}
+		if c.routeOwnership != nil {
+			c.routeOwnership.Cleanup() //nolint:errcheck
+			c.routeOwnership = nil
 		}
 
 		// Close the TUN device so the kernel removes the interface and
@@ -2753,13 +2844,14 @@ func (c *Client) cleanup() {
 		c.tunDev = nil
 
 		// Belt-and-suspenders route cleanup after the interface is gone.
-		if c.pushOpts != nil && ifIndex != 0 {
+		if c.pushOpts != nil && ifIndex != 0 && !hadRouteOwnership {
 			routing.DeleteRoutes(c.pushOpts, ifIndex) //nolint:errcheck
 		}
-		if c.serverBypassIP != nil {
+		if c.serverBypassIP != nil && c.serverBypassOwned {
 			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
 			c.serverBypassIP = nil
 			c.serverBypassGW = nil
+			c.serverBypassOwned = false
 		}
 	}
 }

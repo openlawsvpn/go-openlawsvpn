@@ -49,3 +49,18 @@ func TestResolvedLinkDomainsUsesExplicitRoutesForSplitDNS(t *testing.T) {
 		}
 	}
 }
+
+func TestResolvedStateIncludesAddressesAndDomainKinds(t *testing.T) {
+	cfg := &Config{
+		Servers:       []net.IP{net.ParseIP("10.130.0.2"), net.ParseIP("2001:db8::53")},
+		SearchDomains: []string{"search.example"},
+		RouteDomains:  []string{"route.example"},
+	}
+	addrs, domains := resolvedState(cfg)
+	if string(addrs) != "10.130.0.2\x002001:db8::53\x00" {
+		t.Fatalf("addresses = %q", addrs)
+	}
+	if string(domains) != "route.example\x01\x00search.example\x00\x00" {
+		t.Fatalf("domains = %q", domains)
+	}
+}

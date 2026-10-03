@@ -31,6 +31,9 @@ fixtures. Do not copy reconstructed proprietary source.
   with secret-safe typed metadata.
 - [x] Require a fresh authentication flow after an established session is
   rejected, without reusing the consumed SAML assertion.
+- [x] Detect and deduplicate drift in VPN-owned route and DNS state.
+- [x] Conservatively restore missing owned routes and DNS while preserving
+  pre-existing and later administrator changes.
 
 ## Working on an item
 
@@ -112,7 +115,7 @@ must be able to distinguish “retry transport” from “show browser again.”
 typed reauthentication outcome; CLI behavior is deterministic; and tests cover
 concurrent expiry/disconnect, cancellation, and a successful fresh Phase 1/2.
 
-### [ ] M4 — Detect route and DNS drift without repairing it
+### [x] M4 — Detect route and DNS drift without repairing it
 
 **Goal:** Observe when VPN-owned routes or DNS settings disappear or change and
 emit typed events. This first stage is read-only.
@@ -129,7 +132,7 @@ tag. iOS continues to delegate routes and DNS to NetworkExtension.
 deduplicated event, unrelated system changes produce none, and teardown leaves
 no monitor goroutines behind.
 
-### [ ] M5 — Define conservative route and DNS restoration ownership
+### [x] M5 — Define conservative route and DNS restoration ownership
 
 **Goal:** Specify and implement safe repair after M4 can detect drift.
 

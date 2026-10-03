@@ -17,6 +17,7 @@
 package dns
 
 import (
+	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -52,6 +53,62 @@ func Revert(backend Backend, ifName, backupPath string) error {
 	default:
 		return nil
 	}
+}
+
+// OwnershipForApplied returns file ownership for the fallback backend. macOS
+// removes interface-scoped SCDynamicStore state with the utun lifecycle.
+func OwnershipForApplied(backend Backend, cfg *Config, ifName, backupPath string) (*Ownership, error) {
+	if backend == BackendResolvConf {
+		return OwnershipForBackend(backend, backupPath)
+	}
+	if backend != BackendResolved {
+		return nil, nil
+	}
+	expected, missing, err := readScutilDNS(ifName)
+	if err != nil {
+		return nil, fmt.Errorf("dns: capture scutil ownership: %w", err)
+	}
+	if missing {
+		return nil, fmt.Errorf("dns: capture scutil ownership: applied state is missing")
+	}
+	inspect := func() (DriftKind, bool, error) {
+		current, absent, err := readScutilDNS(ifName)
+		if err != nil {
+			return 0, false, err
+		}
+		if absent {
+			return DriftMissing, true, nil
+		}
+		if !bytes.Equal(current, expected) {
+			return DriftChanged, true, nil
+		}
+		return 0, false, nil
+	}
+	return NewOwnership(inspect, func() error { return applyScutil(cfg, ifName) }, func() error {
+		kind, drifted, err := inspect()
+		if err != nil {
+			return err
+		}
+		if drifted && kind == DriftChanged {
+			return nil
+		}
+		return revertScutil(ifName)
+	}), nil
+}
+
+func readScutilDNS(ifName string) ([]byte, bool, error) {
+	script := fmt.Sprintf("show State:/Network/Service/%s/DNS\n", ifName)
+	cmd := exec.Command("/usr/sbin/scutil")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, false, fmt.Errorf("scutil DNS inspect: %w — %s", err, out)
+	}
+	trimmed := bytes.TrimSpace(out)
+	if bytes.Contains(trimmed, []byte("No such key")) || len(trimmed) == 0 {
+		return nil, true, nil
+	}
+	return append([]byte(nil), trimmed...), false, nil
 }
 
 // scutil script that injects a DNS entry into SCDynamicStore for the given

@@ -14,6 +14,10 @@ const (
 	EventStateChanged
 	// EventStatsUpdate carries a traffic statistics snapshot.
 	EventStatsUpdate
+	// EventRouteDrift reports a missing or changed VPN-owned route.
+	EventRouteDrift
+	// EventDNSDrift reports missing or changed VPN-owned DNS configuration.
+	EventDNSDrift
 )
 
 // ClientState is the connection lifecycle state reported via events.
@@ -67,12 +71,17 @@ type Event struct {
 	// State is set when Type == EventStateChanged.
 	State ClientState
 
-	// Message carries a log line (EventLog), SAML URL (StateWaitingSAML),
-	// error description (StateError), or assigned tunnel IP (StateConnected).
+	// Message carries a log line (EventLog), error description (StateError),
+	// assigned tunnel IP (StateConnected), or drift classification. SAML URLs
+	// and other sensitive values are never carried here.
 	Message string
 
 	// ServerIP is the VPN server IP (set when State == StateConnected).
 	ServerIP string
+
+	// Resource identifies the route destination or DNS resource for a drift
+	// event. Message contains only a non-sensitive classification.
+	Resource string
 
 	// Stats is set when Type == EventStatsUpdate.
 	Stats Stats

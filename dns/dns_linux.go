@@ -4,9 +4,11 @@
 package dns
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -153,4 +155,109 @@ func Revert(backend Backend, ifName, backupPath string) error {
 	default:
 		return nil
 	}
+}
+
+// OwnershipForApplied returns a conservative ownership monitor for the DNS
+// backend selected by Apply.
+func OwnershipForApplied(backend Backend, cfg *Config, ifName, backupPath string) (*Ownership, error) {
+	if backend == BackendResolvConf {
+		return OwnershipForBackend(backend, backupPath)
+	}
+	if backend != BackendResolved {
+		return nil, nil
+	}
+	expectedDNS, expectedDomains := resolvedState(cfg)
+	inspect := func() (DriftKind, bool, error) {
+		dnsState, domains, err := readResolvedState(ifName)
+		if err != nil {
+			return 0, false, err
+		}
+		if len(dnsState) == 0 && len(domains) == 0 {
+			return DriftMissing, true, nil
+		}
+		if !bytes.Equal(dnsState, expectedDNS) || !bytes.Equal(domains, expectedDomains) {
+			return DriftChanged, true, nil
+		}
+		return 0, false, nil
+	}
+	return NewOwnership(inspect, func() error { return ApplyResolved(cfg, ifName) }, func() error {
+		kind, drifted, err := inspect()
+		if err != nil {
+			return err
+		}
+		if drifted && kind == DriftChanged {
+			return nil
+		}
+		return RevertResolved(ifName)
+	}), nil
+}
+
+func resolvedState(cfg *Config) ([]byte, []byte) {
+	var addrs, domains strings.Builder
+	for _, ip := range cfg.Servers {
+		addrs.WriteString(ip.String())
+		addrs.WriteByte(0)
+	}
+	for _, domain := range resolvedLinkDomains(cfg) {
+		domains.WriteString(domain.Domain)
+		if domain.RouteOnly {
+			domains.WriteByte(1)
+		} else {
+			domains.WriteByte(0)
+		}
+		domains.WriteByte(0)
+	}
+	return []byte(addrs.String()), []byte(domains.String())
+}
+
+func readResolvedState(ifName string) ([]byte, []byte, error) {
+	idx, err := ifIndex(ifName)
+	if err != nil {
+		return nil, nil, err
+	}
+	conn, err := dbus.ConnectSystemBus()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer conn.Close()
+	var path dbus.ObjectPath
+	if err := conn.Object(resolvedDest, resolvedPath).Call(resolvedIface+".GetLink", 0, idx).Store(&path); err != nil {
+		return nil, nil, err
+	}
+	obj := conn.Object(resolvedDest, path)
+	var dnsEntries []struct {
+		Family  int32
+		Address []byte
+	}
+	dnsProperty, err := obj.GetProperty("org.freedesktop.resolve1.Link.DNS")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := dbus.Store([]any{dnsProperty.Value()}, &dnsEntries); err != nil {
+		return nil, nil, err
+	}
+	var domainEntries []resolvedDomainEntry
+	domainsProperty, err := obj.GetProperty("org.freedesktop.resolve1.Link.Domains")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := dbus.Store([]any{domainsProperty.Value()}, &domainEntries); err != nil {
+		return nil, nil, err
+	}
+	cfg := &Config{}
+	for _, entry := range dnsEntries {
+		cfg.Servers = append(cfg.Servers, net.IP(entry.Address))
+	}
+	var domains strings.Builder
+	for _, domain := range domainEntries {
+		domains.WriteString(domain.Domain)
+		if domain.RouteOnly {
+			domains.WriteByte(1)
+		} else {
+			domains.WriteByte(0)
+		}
+		domains.WriteByte(0)
+	}
+	addrs, _ := resolvedState(cfg)
+	return addrs, []byte(domains.String()), nil
 }

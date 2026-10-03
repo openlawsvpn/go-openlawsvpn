@@ -257,7 +257,7 @@ func TestConnectCRV1Flow(t *testing.T) {
 
 	// Use the fixed demo token — the same value the static login page POSTs
 	// to the ACS server and that mockserver validates in Phase 2.
-	demoToken := "DEMO2026OPENLAWS"
+	demoToken := "PHNhbWxwOlJlc3BvbnNlIHhtbG5zOnNhbWxwPSJ1cm46b2FzaXM6bmFtZXM6dGM6U0FNTDoyLjA6cHJvdG9jb2wiIElEPSJvcGVubGF3c3Zwbi1kZW1vIj48L3NhbWxwOlJlc3BvbnNlPg=="
 	if err := client.ConnectPhase2Reuse(ctx, demoToken); err != nil {
 		if !strings.Contains(err.Error(), "operation not permitted") &&
 			!strings.Contains(err.Error(), "CAP_NET_ADMIN") {

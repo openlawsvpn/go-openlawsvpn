@@ -53,10 +53,11 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 				if gw, gwErr := routing.LookupGateway(sip); gwErr == nil {
 					if gw == nil {
 						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: redirect-gateway: server %s is direct-link, no bypass needed", sip)})
-					} else if berr := routing.AddBypassRoute(sip, gw); berr == nil {
+					} else if owned, berr := routing.AddBypassRouteOwned(sip, gw); berr == nil {
 						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: redirect-gateway bypass route: %s via %s", sip, gw)})
 						c.serverBypassIP = sip
 						c.serverBypassGW = gw
+						c.serverBypassOwned = owned
 					} else {
 						c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: add bypass route: %v", berr)})
 					}
@@ -66,7 +67,9 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 			}
 		}
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: applying %d routes via %s", len(pushOpts.Routes), dev.Name())})
-		if routeErr := routing.ApplyRoutes(pushOpts, iface.Index); routeErr != nil {
+		routeOwnership, routeErr := routing.ApplyRoutesOwned(pushOpts, iface.Index)
+		c.routeOwnership = routeOwnership
+		if routeErr != nil {
 			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: apply routes: %v", routeErr)})
 		} else {
 			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: routes applied via %s", dev.Name())})
@@ -81,6 +84,9 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 	}
 	dnsBackend, dnsErr := dns.Apply(dnsOpts, dev.Name(), c.dnsBackup)
 	c.dnsBackend = dnsBackend
+	if dnsErr == nil {
+		c.dnsOwnership, dnsErr = dns.OwnershipForApplied(dnsBackend, dnsOpts, dev.Name(), c.dnsBackup)
+	}
 	if dnsErr != nil {
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: apply DNS: %v", dnsErr)})
 	} else {

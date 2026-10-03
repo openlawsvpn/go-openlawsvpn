@@ -71,6 +71,104 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 	return nil
 }
 
+// ApplyRoutesOwned applies routes on macOS. Route ownership remains tied to
+// the utun lifecycle; the returned empty ledger prevents generic cleanup from
+// claiming routes it did not independently verify.
+func ApplyRoutesOwned(opts *PushOptions, ifIndex int) (*Ownership, error) {
+	if err := ApplyRoutes(opts, ifIndex); err != nil {
+		// A non-nil empty ledger prevents callers from falling back to broad
+		// destination-based cleanup after a conflict or partial failure.
+		return NewOwnership(nil, nil, nil, nil), err
+	}
+	if opts == nil {
+		return NewOwnership(nil, nil, nil, nil), nil
+	}
+	ifName, err := ifNameByIndex(ifIndex)
+	if err != nil {
+		return nil, err
+	}
+	type routeOp struct {
+		identity RouteIdentity
+		dst      net.IP
+		mask     net.IPMask
+		gw       net.IP
+	}
+	ops := make(map[string]routeOp)
+	var owned []RouteIdentity
+	addOwned := func(dst net.IP, mask net.IPMask, gw net.IP) {
+		ones, _ := mask.Size()
+		identity := RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: ipStringDarwin(gw), Interface: ifIndex}
+		owned = append(owned, identity)
+		ops[identity.Destination] = routeOp{identity: identity, dst: dst, mask: mask, gw: gw}
+	}
+	defaultGW := net.IP(nil)
+	if opts.Ifconfig != nil {
+		defaultGW = opts.Ifconfig.Gateway
+	}
+	for _, route := range opts.Routes {
+		gw := route.Gateway
+		if gw == nil {
+			gw = defaultGW
+		}
+		addOwned(route.Network, route.Mask, gw)
+	}
+	if opts.RedirectGateway {
+		addOwned(net.IPv4zero, net.CIDRMask(0, 32), defaultGW)
+	}
+	return NewOwnership(owned,
+		func(destination string) (*RouteIdentity, error) {
+			op := ops[destination]
+			return lookupDarwinRouteIdentity(op.dst, op.mask)
+		},
+		func(identity RouteIdentity) error {
+			op := ops[identity.Destination]
+			return routeAdd(op.dst, op.mask, op.gw, ifName)
+		},
+		func(identity RouteIdentity) error {
+			op := ops[identity.Destination]
+			return routeDel(op.dst, op.mask, op.gw, ifName)
+		}), nil
+}
+
+func lookupDarwinRouteIdentity(dst net.IP, mask net.IPMask) (*RouteIdentity, error) {
+	out, err := exec.Command("/sbin/route", "-n", "get", dst.String()).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "not in table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var gateway, ifName string
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		switch strings.TrimSuffix(parts[0], ":") {
+		case "gateway":
+			gateway = parts[1]
+		case "interface":
+			ifName = parts[1]
+		}
+	}
+	if ifName == "" {
+		return nil, nil
+	}
+	ifIndex, err := InterfaceIndex(ifName)
+	if err != nil {
+		return nil, err
+	}
+	ones, _ := mask.Size()
+	return &RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: gateway, Interface: ifIndex}, nil
+}
+
+func ipStringDarwin(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
+}
+
 // DeleteRoutes removes routes added by ApplyRoutes. Errors are collected and
 // returned as a single combined error so cleanup continues past failures.
 func DeleteRoutes(opts *PushOptions, ifIndex int) error {
@@ -142,17 +240,23 @@ func LookupGateway(dst net.IP) (net.IP, error) {
 // is never routed through the TUN after redirect-gateway is applied.
 // A nil gateway is a no-op (direct link needs no bypass).
 func AddBypassRoute(serverIP, gw net.IP) error {
+	_, err := AddBypassRouteOwned(serverIP, gw)
+	return err
+}
+
+// AddBypassRouteOwned adds a bypass route and reports whether it was created.
+func AddBypassRouteOwned(serverIP, gw net.IP) (bool, error) {
 	if gw == nil {
-		return nil
+		return false, nil
 	}
 	err := routeAdd(serverIP, net.CIDRMask(32, 32), gw, "")
 	if isRouteExists(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
+		return false, fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
 	}
-	return nil
+	return true, nil
 }
 
 // DeleteBypassRoute removes the /32 bypass route added by AddBypassRoute.

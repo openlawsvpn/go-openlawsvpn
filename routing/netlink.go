@@ -42,8 +42,49 @@ const nlmsgHdrSize = 16
 //
 // This function requires CAP_NET_ADMIN.
 func ApplyRoutes(opts *PushOptions, ifIndex int) error {
+	_, err := ApplyRoutesOwned(opts, ifIndex)
+	return err
+}
+
+// ApplyRoutesOwned programs routes and returns an ownership ledger containing
+// only entries this call actually created. Pre-existing routes are never
+// adopted, repaired, or deleted by the returned ledger.
+func ApplyRoutesOwned(opts *PushOptions, ifIndex int) (*Ownership, error) {
 	if opts == nil {
-		return nil
+		return NewOwnership(nil, nil, nil, nil), nil
+	}
+	var owned []RouteIdentity
+	type routeOp struct {
+		identity RouteIdentity
+		add      func() error
+		remove   func() error
+		lookup   func() (*RouteIdentity, error)
+	}
+	ops := make(map[string]routeOp)
+	makeOwner := func() *Ownership {
+		return NewOwnership(owned, func(destination string) (*RouteIdentity, error) { return ops[destination].lookup() },
+			func(identity RouteIdentity) error { return ops[identity.Destination].add() },
+			func(identity RouteIdentity) error { return ops[identity.Destination].remove() })
+	}
+	apply := func(op routeOp, label string) error {
+		err := op.add()
+		if err == nil {
+			owned = append(owned, op.identity)
+			ops[op.identity.Destination] = op
+			return nil
+		}
+		if errors.Is(err, syscall.EEXIST) {
+			return nil
+		}
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	v4op := func(dst net.IP, mask net.IPMask, gw net.IP) routeOp {
+		id := routeIdentity(dst, mask, gw, ifIndex)
+		return routeOp{id, func() error { return addRoute(ifIndex, dst, mask, gw) }, func() error { return delRoute(ifIndex, dst, mask, gw) }, func() (*RouteIdentity, error) { return lookupRouteIdentity(dst, mask) }}
+	}
+	v6op := func(dst net.IP, prefix int, gw net.IP) routeOp {
+		id := routeIdentity6(dst, prefix, gw, ifIndex)
+		return routeOp{id, func() error { return addRoute6(ifIndex, dst, prefix, gw) }, func() error { return delRoute6(ifIndex, dst, prefix, gw) }, func() (*RouteIdentity, error) { return lookupRouteIdentity6(dst, prefix) }}
 	}
 
 	// --- IPv4 ---
@@ -53,10 +94,8 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 	}
 
 	if opts.Topology == TopologyNet30 && opts.Ifconfig != nil {
-		if err := addRoute(ifIndex, opts.Ifconfig.Gateway, net.CIDRMask(32, 32), nil); err != nil {
-			if !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("routing: host route to peer %s: %w", opts.Ifconfig.Gateway, err)
-			}
+		if err := apply(v4op(opts.Ifconfig.Gateway, net.CIDRMask(32, 32), nil), "routing: host route to peer "+opts.Ifconfig.Gateway.String()); err != nil {
+			return makeOwner(), err
 		}
 	}
 
@@ -65,18 +104,14 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 		if gw == nil {
 			gw = defaultGW
 		}
-		if err := addRoute(ifIndex, r.Network, r.Mask, gw); err != nil {
-			if !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("routing: add route %s/%s: %w", r.Network, net.IP(r.Mask), err)
-			}
+		if err := apply(v4op(r.Network, r.Mask, gw), "routing: add route "+r.Network.String()); err != nil {
+			return makeOwner(), err
 		}
 	}
 
 	if opts.RedirectGateway {
-		if err := addRoute(ifIndex, net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW); err != nil {
-			if !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("routing: add default route: %w", err)
-			}
+		if err := apply(v4op(net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW), "routing: add default route"); err != nil {
+			return makeOwner(), err
 		}
 	}
 
@@ -91,22 +126,33 @@ func ApplyRoutes(opts *PushOptions, ifIndex int) error {
 		if gw == nil {
 			gw = defaultGW6
 		}
-		if err := addRoute6(ifIndex, r.Network, r.Prefix, gw); err != nil {
-			if !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("routing: add IPv6 route %s/%d: %w", r.Network, r.Prefix, err)
-			}
+		if err := apply(v6op(r.Network, r.Prefix, gw), fmt.Sprintf("routing: add IPv6 route %s/%d", r.Network, r.Prefix)); err != nil {
+			return makeOwner(), err
 		}
 	}
 
 	if opts.RedirectGateway6 {
-		if err := addRoute6(ifIndex, net.IPv6zero, 0, defaultGW6); err != nil {
-			if !errors.Is(err, syscall.EEXIST) {
-				return fmt.Errorf("routing: add IPv6 default route: %w", err)
-			}
+		if err := apply(v6op(net.IPv6zero, 0, defaultGW6), "routing: add IPv6 default route"); err != nil {
+			return makeOwner(), err
 		}
 	}
+	return makeOwner(), nil
+}
 
-	return nil
+func routeIdentity(dst net.IP, mask net.IPMask, gw net.IP, ifIndex int) RouteIdentity {
+	ones, _ := mask.Size()
+	return RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: ipString(gw), Interface: ifIndex}
+}
+
+func routeIdentity6(dst net.IP, prefix int, gw net.IP, ifIndex int) RouteIdentity {
+	return RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To16(), prefix), Gateway: ipString(gw), Interface: ifIndex}
+}
+
+func ipString(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 // DeleteRoutes removes the routes that ApplyRoutes would have added.
@@ -365,6 +411,100 @@ func LookupGateway(dst net.IP) (net.IP, error) {
 	return parseRouteGateway(buf[:n])
 }
 
+func lookupRouteIdentity(dst net.IP, mask net.IPMask) (*RouteIdentity, error) {
+	ones, bits := mask.Size()
+	if bits != 32 {
+		return nil, fmt.Errorf("routing: invalid IPv4 mask")
+	}
+	return queryRouteIdentity(dst.To4(), ones, unix.AF_INET)
+}
+
+func lookupRouteIdentity6(dst net.IP, prefix int) (*RouteIdentity, error) {
+	return queryRouteIdentity(dst.To16(), prefix, unix.AF_INET6)
+}
+
+// queryRouteIdentity asks the kernel for the selected route and accepts it
+// only when its destination prefix exactly matches the owned destination.
+func queryRouteIdentity(dst net.IP, prefix, family int) (*RouteIdentity, error) {
+	sock, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
+	if err != nil {
+		return nil, err
+	}
+	defer unix.Close(sock)
+	if err := unix.Bind(sock, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return nil, err
+	}
+	rt := unix.RtMsg{Family: uint8(family), Dst_len: uint8(prefix), Table: unix.RT_TABLE_MAIN}
+	payload := marshalRtMsg(rt)
+	if prefix > 0 {
+		payload = append(payload, nlAttr(unix.RTA_DST, dst)...)
+	}
+	hdr := unix.NlMsghdr{Len: uint32(nlmsgHdrSize + len(payload)), Type: unix.RTM_GETROUTE, Flags: unix.NLM_F_REQUEST, Seq: 3, Pid: uint32(unix.Getpid())}
+	msg := append(marshalNlHdr(hdr), payload...)
+	if err := unix.Sendto(sock, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 8192)
+	n, _, err := unix.Recvfrom(sock, buf, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ENOENT) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return parseRouteIdentity(buf[:n], dst, prefix)
+}
+
+func parseRouteIdentity(buf, expectedDst []byte, expectedPrefix int) (*RouteIdentity, error) {
+	if len(buf) < nlmsgHdrSize+12 {
+		return nil, nil
+	}
+	if binary.LittleEndian.Uint16(buf[4:6]) == unix.NLMSG_ERROR {
+		errno := int32(binary.LittleEndian.Uint32(buf[nlmsgHdrSize:]))
+		if errno == -int32(syscall.ESRCH) || errno == -int32(syscall.ENOENT) {
+			return nil, nil
+		}
+		if errno != 0 {
+			return nil, syscall.Errno(-errno)
+		}
+	}
+	rt := buf[nlmsgHdrSize : nlmsgHdrSize+12]
+	if int(rt[1]) != expectedPrefix {
+		return nil, nil
+	}
+	family := int(rt[0])
+	var gateway net.IP
+	ifIndex := 0
+	actualDst := make(net.IP, len(expectedDst))
+	attrs := buf[nlmsgHdrSize+12:]
+	for len(attrs) >= 4 {
+		length := int(binary.LittleEndian.Uint16(attrs[:2]))
+		if length < 4 || length > len(attrs) {
+			break
+		}
+		value := attrs[4:length]
+		switch binary.LittleEndian.Uint16(attrs[2:4]) {
+		case unix.RTA_DST:
+			copy(actualDst, value)
+		case unix.RTA_GATEWAY:
+			gateway = append(net.IP(nil), value...)
+		case unix.RTA_OIF:
+			if len(value) >= 4 {
+				ifIndex = int(binary.LittleEndian.Uint32(value))
+			}
+		}
+		attrs = attrs[(length+3)&^3:]
+	}
+	if expectedPrefix > 0 && !net.IP(actualDst).Equal(net.IP(expectedDst)) {
+		return nil, nil
+	}
+	destination := fmt.Sprintf("%s/%d", net.IP(expectedDst), expectedPrefix)
+	if family == unix.AF_INET {
+		destination = fmt.Sprintf("%s/%d", net.IP(expectedDst).To4(), expectedPrefix)
+	}
+	return &RouteIdentity{Destination: destination, Gateway: ipString(gateway), Interface: ifIndex}, nil
+}
+
 // parseRouteGateway extracts RTA_GATEWAY from a single RTM_GETROUTE response.
 // Returns (nil, nil) for direct link routes (no gateway attribute).
 func parseRouteGateway(buf []byte) (net.IP, error) {
@@ -412,18 +552,25 @@ func parseRouteGateway(buf []byte) (net.IP, error) {
 // applied.  A gateway of nil is accepted (direct link) but the route is only
 // useful when a gateway is present.  EEXIST is treated as success.
 func AddBypassRoute(serverIP, gw net.IP) error {
+	_, err := AddBypassRouteOwned(serverIP, gw)
+	return err
+}
+
+// AddBypassRouteOwned adds a bypass route and reports whether this call
+// created it. A pre-existing identical route is successful but not owned.
+func AddBypassRouteOwned(serverIP, gw net.IP) (bool, error) {
 	if gw == nil {
-		return nil // direct link — no bypass route needed
+		return false, nil // direct link — no bypass route needed
 	}
 	err := netlinkRouteMsg(unix.RTM_NEWROUTE, unix.NLM_F_CREATE|unix.NLM_F_EXCL,
 		0, serverIP, net.CIDRMask(32, 32), gw)
 	if errors.Is(err, syscall.EEXIST) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
+		return false, fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
 	}
-	return nil
+	return true, nil
 }
 
 // DeleteBypassRoute removes the /32 bypass route added by AddBypassRoute.
