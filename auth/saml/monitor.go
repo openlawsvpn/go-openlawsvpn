@@ -2,11 +2,11 @@
 package saml
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 )
 
 // SessionMonitor watches an active VPN control channel for server-side
@@ -15,8 +15,8 @@ import (
 // After PUSH_REPLY has been received and the tunnel is up, the VPN server may
 // send AUTH_FAILED at any time to signal that the session has expired and must
 // be re-authenticated.  SessionMonitor reads control messages from an
-// io.Reader in a goroutine and delivers a *SessionExpiredError (or any other
-// read error) via its Done channel.
+// io.Reader in a goroutine, forwards non-authentication messages to an optional
+// handler, and delivers a *SessionExpiredError (or any read error) via Done.
 //
 // Usage:
 //
@@ -30,21 +30,31 @@ import (
 //	    }
 //	}
 type SessionMonitor struct {
-	r    io.Reader
-	done chan error
+	r         io.Reader
+	done      chan error
+	onMessage func(*ControlMessage)
 }
 
 // NewSessionMonitor creates a SessionMonitor that reads from r.
 // r is typically the TLS connection to the VPN server, read after PUSH_REPLY.
 func NewSessionMonitor(r io.Reader) *SessionMonitor {
+	return NewSessionMonitorWithHandler(r, nil)
+}
+
+// NewSessionMonitorWithHandler creates a SessionMonitor that invokes
+// onMessage for each non-authentication message received after tunnel setup.
+// The handler runs on the monitor goroutine and must not block.
+func NewSessionMonitorWithHandler(r io.Reader, onMessage func(*ControlMessage)) *SessionMonitor {
 	return &SessionMonitor{
-		r:    r,
-		done: make(chan error, 1),
+		r:         r,
+		done:      make(chan error, 1),
+		onMessage: onMessage,
 	}
 }
 
 // Start begins monitoring in a background goroutine.
-// The goroutine stops when ctx is cancelled or when a message is received.
+// The goroutine stops when ctx is cancelled, authentication fails, or the
+// control-channel reader returns an error.
 // Errors (including *SessionExpiredError) are delivered via Done().
 func (m *SessionMonitor) Start(ctx context.Context) {
 	go m.run(ctx)
@@ -69,11 +79,12 @@ func (m *SessionMonitor) run(ctx context.Context) {
 		cm  *ControlMessage
 		err error
 	}
+	reader := bufio.NewReader(m.r)
 
 	for {
 		ch := make(chan result, 1)
 		go func() {
-			cm, err := ReadControlMsg(m.r, 0)
+			cm, err := ReadControlMsg(reader, 0)
 			ch <- result{cm, err}
 		}()
 
@@ -95,11 +106,12 @@ func (m *SessionMonitor) run(ctx context.Context) {
 				m.done <- &SessionExpiredError{Msg: res.cm.Raw}
 				return
 			default:
-				// Unknown mid-session message (e.g. server-pushed PUSH_REPLY update,
-				// INFO_PRE, restart notice) — log and continue reading.
+				// Unknown mid-session message (e.g. CR_TEXT, AWS_CC_MSG,
+				// INFO_PRE, or PUSH_REPLY update) is delivered to the caller.
 				// Do not close the tunnel for messages we don't recognise.
-				_ = strings.TrimRight(res.cm.Raw, "\x00")
-				// continue loop
+				if m.onMessage != nil {
+					m.onMessage(res.cm)
+				}
 			}
 		}
 	}

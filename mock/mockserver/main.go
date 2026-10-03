@@ -11,6 +11,9 @@
 //	                           instead of PUSH_REPLY; Phase 2 validates token then sends PUSH_REPLY
 //	MOCK_REDIRECT_GATEWAY=1  — include "redirect-gateway def1" in PUSH_REPLY
 //	                           (simulates AWS Client VPN full-tunnel mode)
+//	MOCK_CONTROL_MESSAGE      — coalesce this message with PUSH_REPLY, then wait
+//	                           for and log one client control-message response
+//	MOCK_NO_IFCONFIG=1        — omit tunnel addressing (unprivileged control tests)
 //	MOCK_TCP_PORT            — TCP listen port (default 4433)
 //	MOCK_UDP_PORT            — UDP listen port (default 1194)
 //	CERT_DIR                 — directory containing ca.crt server.crt server.key
@@ -497,14 +500,10 @@ func handleSession(f framer, remote string, tlsCfg *tls.Config, crv1 bool) {
 		return
 	}
 
-	// Normal mode: PUSH_REPLY.
-	pushReply := buildPushReply()
-	if _, err := tlsConn.Write([]byte(pushReply)); err != nil {
-		logEvent("error", "write push_reply: "+err.Error())
+	// Normal mode: PUSH_REPLY and optional application-message fixture.
+	if !serveEstablishedSession(tlsConn, "sent to "+remote) {
 		return
 	}
-	logEvent("push_reply", "sent to "+remote)
-	io.Copy(io.Discard, tlsConn) //nolint:errcheck
 	logEvent("disconnect", remote)
 }
 
@@ -540,14 +539,56 @@ func handleCRV1Phase2(tlsConn *tls.Conn, authInfo clientAuthInfo, remote string)
 	}
 	logEvent("crv1_phase2_ok", fmt.Sprintf("state_id_len=%d", len(stateID)))
 
-	pushReply := buildPushReply()
-	if _, err := tlsConn.Write([]byte(pushReply)); err != nil {
-		logEvent("error", "write push_reply (crv1 phase2): "+err.Error())
+	if !serveEstablishedSession(tlsConn, "sent after crv1 phase2 to "+remote) {
 		return
 	}
-	logEvent("push_reply", "sent after crv1 phase2 to "+remote)
-	io.Copy(io.Discard, tlsConn) //nolint:errcheck
 	logEvent("disconnect", remote)
+}
+
+// serveEstablishedSession sends PUSH_REPLY and, when configured, a following
+// application message in the same TLS write. It then records one NUL-terminated
+// response from the client before draining the session.
+func serveEstablishedSession(tlsConn *tls.Conn, detail string) bool {
+	wire := []byte(buildPushReply())
+	controlMessage := os.Getenv("MOCK_CONTROL_MESSAGE")
+	if controlMessage != "" {
+		wire = append(wire, controlMessage...)
+		wire = append(wire, 0)
+	}
+	if _, err := tlsConn.Write(wire); err != nil {
+		logEvent("error", "write push_reply: "+err.Error())
+		return false
+	}
+	logEvent("push_reply", detail)
+
+	if controlMessage != "" {
+		tlsConn.SetReadDeadline(time.Now().Add(5 * time.Second)) //nolint:errcheck
+		response, err := readNULTerminated(tlsConn, 128*1024)
+		tlsConn.SetReadDeadline(time.Time{}) //nolint:errcheck
+		if err != nil {
+			logEvent("error", "read control response: "+err.Error())
+			return false
+		}
+		logEvent("control_message_recv", response)
+	}
+
+	io.Copy(io.Discard, tlsConn) //nolint:errcheck
+	return true
+}
+
+func readNULTerminated(r io.Reader, maxBytes int) (string, error) {
+	buf := make([]byte, 0, min(maxBytes, 4096))
+	var one [1]byte
+	for len(buf) <= maxBytes {
+		if _, err := io.ReadFull(r, one[:]); err != nil {
+			return "", err
+		}
+		if one[0] == 0 {
+			return string(buf), nil
+		}
+		buf = append(buf, one[0])
+	}
+	return "", fmt.Errorf("control response exceeds %d bytes", maxBytes)
 }
 
 // ---- Auth packet helpers -----------------------------------------------------
@@ -797,8 +838,11 @@ func authStr16(s string) []byte {
 // When MOCK_REDIRECT_GATEWAY=1 is set, the reply includes "redirect-gateway def1"
 // to simulate AWS Client VPN full-tunnel mode (all traffic via the VPN).
 func buildPushReply() string {
-	base := "PUSH_REPLY,ifconfig 10.8.0.6 10.8.0.5,route 10.8.0.0 255.255.0.0," +
-		"dhcp-option DNS 10.8.0.1,cipher AES-256-GCM," +
+	base := "PUSH_REPLY,"
+	if os.Getenv("MOCK_NO_IFCONFIG") != "1" {
+		base += "ifconfig 10.8.0.6 10.8.0.5,route 10.8.0.0 255.255.0.0,dhcp-option DNS 10.8.0.1,"
+	}
+	base += "cipher AES-256-GCM," +
 		"ping 10,ping-restart 60," +
 		"key-derivation tls-ekm"
 	if os.Getenv("MOCK_REDIRECT_GATEWAY") == "1" {

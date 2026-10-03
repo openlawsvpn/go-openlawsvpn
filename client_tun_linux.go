@@ -19,14 +19,14 @@ func (c *Client) openNativeTUN(pushOpts *routing.PushOptions, dnsOpts *dns.Confi
 	if err != nil {
 		return nil, fmt.Errorf("vpn: open TUN device: %w (run as root or grant CAP_NET_ADMIN)", err)
 	}
-	cfg := tun.Config{
-		LocalIP: pushOpts.Ifconfig.Local,
-		MTU:     mtu,
-	}
-	if pushOpts.Topology == routing.TopologySubnet {
-		cfg.Mask = pushOpts.Ifconfig.Mask
-	} else {
-		cfg.PeerIP = pushOpts.Ifconfig.Gateway
+	cfg := tun.Config{MTU: mtu}
+	if pushOpts.Ifconfig != nil {
+		cfg.LocalIP = pushOpts.Ifconfig.Local
+		if pushOpts.Topology == routing.TopologySubnet {
+			cfg.Mask = pushOpts.Ifconfig.Mask
+		} else {
+			cfg.PeerIP = pushOpts.Ifconfig.Gateway
+		}
 	}
 	if cfgErr := dev.Configure(cfg); cfgErr != nil {
 		dev.Close()

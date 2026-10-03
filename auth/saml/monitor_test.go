@@ -83,3 +83,31 @@ func TestSessionMonitorContextCancel(t *testing.T) {
 		t.Fatal("timeout after context cancel")
 	}
 }
+
+func TestSessionMonitorDeliversApplicationMessages(t *testing.T) {
+	r := strings.NewReader("CR_TEXT,challenge\x00AUTH_FAILED\x00")
+	messages := make(chan string, 1)
+	mon := saml.NewSessionMonitorWithHandler(r, func(message *saml.ControlMessage) {
+		messages <- message.Raw
+	})
+	mon.Start(context.Background())
+
+	select {
+	case got := <-messages:
+		if got != "CR_TEXT,challenge" {
+			t.Fatalf("message = %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for control message")
+	}
+
+	select {
+	case err := <-mon.Done():
+		var expired *saml.SessionExpiredError
+		if !errors.As(err, &expired) {
+			t.Fatalf("expected session expiry after callback, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for monitor completion")
+	}
+}

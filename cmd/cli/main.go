@@ -356,6 +356,10 @@ RELAY ENDPOINTS
 				fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
 				return
 			}
+			if errors.Is(reason, vpn.ErrPingExit) {
+				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel stopped by ping-exit (%v)\n", reason)
+				return
+			}
 			// Unclean disconnect (dead link, keepalive timeout, etc.) — reconnect.
 			fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel down (%v), reconnecting...\n", reason)
 			if err := client.Reconnect(ctx); err != nil {

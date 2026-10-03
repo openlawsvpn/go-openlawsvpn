@@ -2,10 +2,15 @@
 package saml
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"strings"
 )
+
+// MaxControlMessageBytes is the maximum control-channel application-message
+// payload accepted by AWS's patched OpenVPN3 client.
+const MaxControlMessageBytes = 128 * 1024
 
 // MsgKind classifies a control-channel plaintext message received from the VPN
 // server after TLS negotiation.
@@ -83,17 +88,70 @@ func ParseControlMsg(msg string) (*ControlMessage, error) {
 
 // ReadControlMsg reads one NUL-terminated control message from r (typically a
 // *tls.Conn) and returns the classified ControlMessage.
-// At most maxBytes bytes are read; pass 0 to use the default (4096).
+// At most maxBytes payload bytes are read; pass 0 to use
+// MaxControlMessageBytes. The reader may return a message in any number of
+// fragments; bytes after the first NUL terminator are left unread.
 func ReadControlMsg(r io.Reader, maxBytes int) (*ControlMessage, error) {
 	if maxBytes <= 0 {
-		maxBytes = 65536
+		maxBytes = MaxControlMessageBytes
 	}
-	buf := make([]byte, maxBytes)
-	n, err := r.Read(buf)
-	if err != nil && n == 0 {
-		return nil, fmt.Errorf("saml: ReadControlMsg: %w", err)
+	buf := make([]byte, 0, min(maxBytes, 4096))
+	var one [1]byte
+	byteReader, readsBytes := r.(io.ByteReader)
+	for {
+		var n int
+		var err error
+		if readsBytes {
+			one[0], err = byteReader.ReadByte()
+			if err == nil {
+				n = 1
+			}
+		} else {
+			n, err = r.Read(one[:])
+		}
+		if n > 0 {
+			if one[0] == 0 {
+				return ParseControlMsg(string(buf))
+			}
+			if len(buf) == maxBytes {
+				return nil, fmt.Errorf("saml: control message exceeds %d bytes", maxBytes)
+			}
+			buf = append(buf, one[0])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) && len(buf) > 0 {
+				return ParseControlMsg(string(buf))
+			}
+			return nil, fmt.Errorf("saml: ReadControlMsg: %w", err)
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("saml: ReadControlMsg: %w", io.ErrNoProgress)
+		}
 	}
-	return ParseControlMsg(string(buf[:n]))
+}
+
+// WriteControlMsg writes one NUL-terminated application message to the
+// OpenVPN TLS control channel. The message must not already contain NUL.
+// Pass maxBytes <= 0 to enforce MaxControlMessageBytes.
+func WriteControlMsg(w io.Writer, message string, maxBytes int) error {
+	if maxBytes <= 0 {
+		maxBytes = MaxControlMessageBytes
+	}
+	if strings.IndexByte(message, 0) >= 0 {
+		return fmt.Errorf("saml: control message contains NUL")
+	}
+	if len(message) > maxBytes {
+		return fmt.Errorf("saml: control message exceeds %d bytes", maxBytes)
+	}
+	wire := message + "\x00"
+	n, err := io.WriteString(w, wire)
+	if err != nil {
+		return fmt.Errorf("saml: write control message: %w", err)
+	}
+	if n != len(wire) {
+		return fmt.Errorf("saml: write control message: %w", io.ErrShortWrite)
+	}
+	return nil
 }
 
 // WritePhase2Credential writes the legacy AUTH_REPLY form used by the package

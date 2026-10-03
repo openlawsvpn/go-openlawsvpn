@@ -157,6 +157,72 @@ func TestConnectNoCRV1(t *testing.T) {
 	}
 }
 
+func TestControlMessageRoundTrip(t *testing.T) {
+	const (
+		serverMessage = "AWS_CC_MSG,1,1,0,posture-request"
+		clientMessage = "AWS_CC_MSG,1,1,0,posture-response"
+	)
+	bin := buildMockServer(t)
+	srv, err := testenv.Start(testenv.Config{
+		Binary:         bin,
+		ControlMessage: serverMessage,
+		NoIfconfig:     true,
+	})
+	if err != nil {
+		t.Fatalf("start mock server: %v", err)
+	}
+	defer srv.Stop()
+
+	p := mockProfile(t, srv.TCPAddr)
+	client := vpn.New(p)
+	received := make(chan string, 1)
+	sendErr := make(chan error, 1)
+	client.ControlMessageFn = func(message string) {
+		received <- message
+		go func() { sendErr <- client.SendControlMessage(clientMessage) }()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.Connect(ctx); err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() {
+		client.Disconnect()        //nolint:errcheck
+		client.WaitForDisconnect() //nolint:errcheck
+	}()
+
+	select {
+	case got := <-received:
+		if got != serverMessage {
+			t.Fatalf("control callback = %q, want %q", got, serverMessage)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for server control message")
+	}
+	select {
+	case err := <-sendErr:
+		if err != nil {
+			t.Fatalf("SendControlMessage: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out sending client control message")
+	}
+
+	// The server logs only after it has read the complete NUL-terminated reply.
+	time.Sleep(100 * time.Millisecond)
+	found := false
+	for _, event := range srv.Events {
+		if event.Event == "control_message_recv" && event.Detail == clientMessage {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("mock server did not receive control response; events: %+v", srv.Events)
+	}
+}
+
 // TestConnectCRV1Flow verifies the full two-phase SAML/CRV1 flow against the
 // local mock server. It drives the two phases via Phase1ForTest +
 // ConnectPhase2Reuse to exercise the same code path as Connect does for AWS SSO

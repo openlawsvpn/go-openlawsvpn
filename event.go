@@ -80,3 +80,8 @@ type Event struct {
 // It is called from internal goroutines; implementations must not block.
 // Set Client.EventFn before calling Connect.
 type EventFn func(Event)
+
+// ControlMessageFn receives a non-authentication application message from the
+// TLS control channel. Implementations must not block and must treat the
+// message as untrusted, potentially sensitive server input.
+type ControlMessageFn func(message string)

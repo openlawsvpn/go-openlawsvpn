@@ -76,6 +76,44 @@ func TestReadControlMsg(t *testing.T) {
 	}
 }
 
+func TestReadControlMsgPreservesFollowingMessage(t *testing.T) {
+	r := strings.NewReader("CR_TEXT,first\x00INFO,second\x00")
+	first, err := saml.ReadControlMsg(r, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := saml.ReadControlMsg(r, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Raw != "CR_TEXT,first" || second.Raw != "INFO,second" {
+		t.Fatalf("messages = (%q, %q)", first.Raw, second.Raw)
+	}
+}
+
+func TestReadControlMsgLimit(t *testing.T) {
+	_, err := saml.ReadControlMsg(strings.NewReader("12345\x00"), 4)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("ReadControlMsg error = %v", err)
+	}
+}
+
+func TestWriteControlMsg(t *testing.T) {
+	var buf bytes.Buffer
+	if err := saml.WriteControlMsg(&buf, "AWS_CC_MSG,1,1,0,payload", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "AWS_CC_MSG,1,1,0,payload\x00"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+	if err := saml.WriteControlMsg(&buf, "bad\x00message", 0); err == nil {
+		t.Fatal("expected embedded-NUL error")
+	}
+	if err := saml.WriteControlMsg(&buf, "12345", 4); err == nil {
+		t.Fatal("expected size-limit error")
+	}
+}
+
 func TestWritePhase2Credential(t *testing.T) {
 	var buf bytes.Buffer
 	credential := saml.BuildPhase2Password("stateABC", "tok123")

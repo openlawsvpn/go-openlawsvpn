@@ -75,6 +75,20 @@ type Profile struct {
 	// OpenVPN applies its default MSS clamp.
 	MSSFixSet bool
 
+	// PingInterval is the static keepalive send interval in seconds from a
+	// "ping" or "keepalive" directive. Zero means no static value was set.
+	PingInterval int
+	// PingRestart is the static reconnect timeout in seconds. It is mutually
+	// exclusive with PingExit; the last applicable directive wins.
+	PingRestart int
+	// PingExit is the static terminal timeout in seconds. Unlike PingRestart,
+	// expiry must stop the client without reconnecting.
+	PingExit int
+
+	// Ifconfig6 is static IPv6 tunnel addressing from an ifconfig-ipv6
+	// directive. A server-pushed value takes precedence.
+	Ifconfig6 *IPv6Config
+
 	// RandomHostname indicates the 'remote-random-hostname' directive was present.
 	// When true, the client must prepend a random subdomain to Remote before dialing.
 	// AWS Client VPN requires this — the bare endpoint hostname has no DNS record.
@@ -96,6 +110,17 @@ type Profile struct {
 	DNSServers       []net.IP
 	DNSSearchDomains []string
 	DNSRouteDomains  []string
+}
+
+// IPv6Config holds static IPv6 tunnel addressing from an ifconfig-ipv6
+// directive.
+type IPv6Config struct {
+	// Local is the IPv6 address assigned to the client's TUN interface.
+	Local net.IP
+	// Prefix is the IPv6 network prefix length.
+	Prefix int
+	// Gateway is the optional IPv6 next-hop address.
+	Gateway net.IP
 }
 
 // AuthFlow describes which authentication mechanism the profile uses.
@@ -290,6 +315,59 @@ func ParseFile(r io.Reader) (*Profile, error) {
 				p.MSSFix = n
 				p.MSSFixSet = true
 			}
+		case "ping":
+			n, err := parsePositiveSeconds("ping", fields)
+			if err != nil {
+				return nil, err
+			}
+			p.PingInterval = n
+		case "ping-restart":
+			n, err := parsePositiveSeconds("ping-restart", fields)
+			if err != nil {
+				return nil, err
+			}
+			p.PingRestart = n
+			p.PingExit = 0
+		case "ping-exit":
+			n, err := parsePositiveSeconds("ping-exit", fields)
+			if err != nil {
+				return nil, err
+			}
+			p.PingExit = n
+			p.PingRestart = 0
+		case "keepalive":
+			if len(fields) < 3 {
+				return nil, fmt.Errorf("profile: keepalive: expected ping and timeout values")
+			}
+			ping, err := strconv.Atoi(fields[1])
+			if err != nil || ping <= 0 {
+				return nil, fmt.Errorf("profile: keepalive: invalid ping value %q", fields[1])
+			}
+			timeout, err := strconv.Atoi(fields[2])
+			if err != nil || timeout <= 0 {
+				return nil, fmt.Errorf("profile: keepalive: invalid timeout value %q", fields[2])
+			}
+			p.PingInterval = ping
+			p.PingRestart = timeout
+			p.PingExit = 0
+		case "ifconfig-ipv6":
+			if len(fields) < 2 {
+				return nil, fmt.Errorf("profile: ifconfig-ipv6: missing address")
+			}
+			local, network, err := net.ParseCIDR(fields[1])
+			if err != nil || local.To4() != nil {
+				return nil, fmt.Errorf("profile: ifconfig-ipv6: invalid address %q", fields[1])
+			}
+			prefix, _ := network.Mask.Size()
+			cfg := &IPv6Config{Local: local, Prefix: prefix}
+			if len(fields) >= 3 {
+				gateway := net.ParseIP(fields[2])
+				if gateway == nil || gateway.To4() != nil {
+					return nil, fmt.Errorf("profile: ifconfig-ipv6: invalid gateway %q", fields[2])
+				}
+				cfg.Gateway = gateway
+			}
+			p.Ifconfig6 = cfg
 		case "remote-random-hostname":
 			p.RandomHostname = true
 		case "auth-federate":
@@ -339,6 +417,17 @@ func ParseFile(r io.Reader) (*Profile, error) {
 		return nil, fmt.Errorf("profile: missing 'remote' directive")
 	}
 	return p, nil
+}
+
+func parsePositiveSeconds(directive string, fields []string) (int, error) {
+	if len(fields) < 2 {
+		return 0, fmt.Errorf("profile: %s: missing value", directive)
+	}
+	n, err := strconv.Atoi(fields[1])
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("profile: %s: invalid %q", directive, fields[1])
+	}
+	return n, nil
 }
 
 // ParseString is a convenience wrapper around ParseFile for in-memory profiles.

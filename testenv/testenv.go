@@ -66,6 +66,14 @@ type Config struct {
 	// full-tunnel mode. Use this to test issue #7 bypass-route behaviour.
 	RedirectGateway bool
 
+	// ControlMessage, when non-empty, is coalesced with PUSH_REPLY and sent to
+	// the connected client. The mock waits for and logs one client response.
+	ControlMessage string
+
+	// NoIfconfig omits tunnel addressing from PUSH_REPLY so control-channel
+	// integration tests can run without creating a privileged TUN device.
+	NoIfconfig bool
+
 	// Image overrides the default Docker image name (Docker mode only).
 	Image string
 
@@ -140,6 +148,12 @@ func startDocker(cfg Config) (*Server, error) {
 	if cfg.RedirectGateway {
 		args = append(args, "-e", "MOCK_REDIRECT_GATEWAY=1")
 	}
+	if cfg.ControlMessage != "" {
+		args = append(args, "-e", "MOCK_CONTROL_MESSAGE="+cfg.ControlMessage)
+	}
+	if cfg.NoIfconfig {
+		args = append(args, "-e", "MOCK_NO_IFCONFIG=1")
+	}
 	args = append(args, img)
 
 	out, err := exec.Command("docker", args...).Output()
@@ -178,6 +192,12 @@ func startBinary(binPath string, cfg Config) (*Server, error) {
 	}
 	if cfg.RedirectGateway {
 		env = append(env, "MOCK_REDIRECT_GATEWAY=1")
+	}
+	if cfg.ControlMessage != "" {
+		env = append(env, "MOCK_CONTROL_MESSAGE="+cfg.ControlMessage)
+	}
+	if cfg.NoIfconfig {
+		env = append(env, "MOCK_NO_IFCONFIG=1")
 	}
 	if cfg.CertDir != "" {
 		env = append(env, "CERT_DIR="+cfg.CertDir)
