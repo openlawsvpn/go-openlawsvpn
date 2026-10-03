@@ -29,6 +29,40 @@ func securityTestClient(t *testing.T) *Client {
 	return c
 }
 
+func TestControlMessageDiagnosticsRedactSensitivePayloads(t *testing.T) {
+	c := securityTestClient(t)
+	var messages []string
+	c.EventFn = func(event Event) {
+		if event.Type == EventLog {
+			messages = append(messages, event.Message)
+		}
+	}
+
+	const challengeSecret = "SECRET_CHALLENGE_CANARY"
+	challenge, err := saml.ParseControlMsg("CR_TEXT," + challengeSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.emitControlMessageDiagnostic("received", challenge)
+
+	const fragmentSecret = "SECRET_POSTURE_FRAGMENT"
+	fragment, err := saml.ParseControlMsg("AWS_CC_MSG,1791062400123456,2,1," + fragmentSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.emitControlMessageDiagnostic("received", fragment)
+
+	joined := strings.Join(messages, "\n")
+	if strings.Contains(joined, challengeSecret) || strings.Contains(joined, fragmentSecret) {
+		t.Fatalf("diagnostics disclosed sensitive payload: %s", joined)
+	}
+	for _, want := range []string{"kind=CR_TEXT", "payload_bytes=", "fragments=2", "index=1", "payload=redacted"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("diagnostics missing %q: %s", want, joined)
+		}
+	}
+}
+
 func TestReconnectAfterSessionExpiryDoesNotReuseAssertion(t *testing.T) {
 	c := securityTestClient(t)
 	c.state = stateDisconnected

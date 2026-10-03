@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -28,6 +29,11 @@ const (
 	// MsgKindCRText is a generic challenge text application message. Its body
 	// is authentication material and must not be logged.
 	MsgKindCRText
+	// MsgKindAWSCC is an AWS device-posture response fragment. Its fragment
+	// payload is sensitive and must not be logged.
+	MsgKindAWSCC
+	// MsgKindPostureCheckInterval is an AWS device-posture refresh interval.
+	MsgKindPostureCheckInterval
 )
 
 // String returns a non-sensitive description of the control-message kind.
@@ -41,6 +47,10 @@ func (k MsgKind) String() string {
 		return "AUTH_FAILED"
 	case MsgKindCRText:
 		return "CR_TEXT"
+	case MsgKindAWSCC:
+		return "AWS_CC_MSG"
+	case MsgKindPostureCheckInterval:
+		return "POSTURE_CHECK_INTERVAL"
 	default:
 		return "UNKNOWN"
 	}
@@ -59,6 +69,10 @@ func ClassifyMsg(msg string) MsgKind {
 		return MsgKindAuthFailed
 	case msg == "CR_TEXT" || strings.HasPrefix(msg, "CR_TEXT,") || strings.HasPrefix(msg, "CR_TEXT:"):
 		return MsgKindCRText
+	case strings.HasPrefix(msg, "AWS_CC_MSG,"):
+		return MsgKindAWSCC
+	case strings.HasPrefix(msg, "CRV1::POSTURE_CHECK_INTERVAL::"):
+		return MsgKindPostureCheckInterval
 	default:
 		return MsgKindUnknown
 	}
@@ -77,6 +91,20 @@ type ControlMessage struct {
 	// DynamicChallenge describes authentication challenge metadata. Secret
 	// fields are kept in a distinct value and must not be logged.
 	DynamicChallenge *DynamicChallenge
+	// AWSCC contains safe fragment metadata for an AWS_CC_MSG. The fragment
+	// itself remains only in Raw and must not be logged.
+	AWSCC *AWSCCMetadata
+	// PostureCheckIntervalSeconds is set for a posture refresh directive.
+	PostureCheckIntervalSeconds *uint64
+}
+
+// AWSCCMetadata contains the non-secret header fields of an AWS device-posture
+// response fragment.
+type AWSCCMetadata struct {
+	TimestampMicros uint64
+	FragmentCount   uint64
+	FragmentIndex   uint64
+	FragmentBytes   int
 }
 
 // DynamicChallengeKind identifies a published OpenVPN dynamic-challenge wire
@@ -182,6 +210,36 @@ func ParseControlMsg(msg string) (*ControlMessage, error) {
 			Metadata: DynamicChallengeMetadata{Kind: DynamicChallengeText, PromptPresent: prompt != ""},
 			Secrets:  DynamicChallengeSecrets{Prompt: prompt},
 		}
+	} else if kind == MsgKindAWSCC {
+		fields := strings.SplitN(stripped, ",", 5)
+		if len(fields) != 5 {
+			return nil, fmt.Errorf("saml: malformed AWS_CC_MSG header")
+		}
+		timestamp, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("saml: malformed AWS_CC_MSG timestamp")
+		}
+		count, err := strconv.ParseUint(fields[2], 10, 64)
+		if err != nil || count == 0 {
+			return nil, fmt.Errorf("saml: malformed AWS_CC_MSG fragment count")
+		}
+		index, err := strconv.ParseUint(fields[3], 10, 64)
+		if err != nil || index >= count {
+			return nil, fmt.Errorf("saml: malformed AWS_CC_MSG fragment index")
+		}
+		cm.AWSCC = &AWSCCMetadata{
+			TimestampMicros: timestamp,
+			FragmentCount:   count,
+			FragmentIndex:   index,
+			FragmentBytes:   len(fields[4]),
+		}
+	} else if kind == MsgKindPostureCheckInterval {
+		value := strings.TrimPrefix(stripped, "CRV1::POSTURE_CHECK_INTERVAL::")
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || seconds == 0 {
+			return nil, fmt.Errorf("saml: malformed posture check interval")
+		}
+		cm.PostureCheckIntervalSeconds = &seconds
 	}
 	return cm, nil
 }

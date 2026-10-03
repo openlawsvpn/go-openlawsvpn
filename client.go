@@ -1292,7 +1292,47 @@ func (c *Client) SendControlMessage(message string) error {
 	if err := saml.WriteControlMsg(rw, message, saml.MaxControlMessageBytes); err != nil {
 		return fmt.Errorf("vpn: send control message: %w", err)
 	}
+	if cm, err := saml.ParseControlMsg(message); err == nil && cm.Kind == saml.MsgKindAWSCC {
+		c.emitControlMessageDiagnostic("sent", cm)
+	}
 	return nil
+}
+
+func (c *Client) emitControlMessageDiagnostic(direction string, message *saml.ControlMessage) {
+	if message == nil {
+		return
+	}
+	switch message.Kind {
+	case saml.MsgKindCRText:
+		payloadBytes := len(message.Raw) - len("CR_TEXT")
+		if payloadBytes > 0 {
+			payloadBytes--
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: dynamic challenge %s: kind=CR_TEXT payload_bytes=%d payload=redacted",
+			direction, payloadBytes)})
+	case saml.MsgKindAWSCC:
+		if message.AWSCC == nil {
+			return
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: device posture fragment %s: timestamp_us=%d fragments=%d index=%d payload_bytes=%d payload=redacted",
+			direction, message.AWSCC.TimestampMicros, message.AWSCC.FragmentCount,
+			message.AWSCC.FragmentIndex, message.AWSCC.FragmentBytes)})
+	case saml.MsgKindPostureCheckInterval:
+		if message.PostureCheckIntervalSeconds == nil {
+			return
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: device posture refresh requested: interval_seconds=%d",
+			*message.PostureCheckIntervalSeconds)})
+	default:
+		if c.prof != nil && c.prof.Verb >= 4 {
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+				"vpn: control message %s: kind=%s bytes=%d payload=redacted",
+				direction, message.Kind, len(message.Raw))})
+		}
+	}
 }
 
 // ---- internal helpers --------------------------------------------------------
@@ -2695,6 +2735,7 @@ func (c *Client) sessionMonitorFor(ctx context.Context, rw io.Reader) {
 		return
 	}
 	mon := saml.NewSessionMonitorWithHandler(rw, func(message *saml.ControlMessage) {
+		c.emitControlMessageDiagnostic("received", message)
 		c.mu.Lock()
 		onMessage := c.ControlMessageFn
 		onTypedMessage := c.TypedControlMessageFn

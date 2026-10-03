@@ -24,6 +24,9 @@ canonical project history.
 - Add a distinct `reauth_required` client state so applications can distinguish
   a fresh browser flow from an ordinary transport retry.
 - Add deduplicated route and DNS drift events for VPN-owned host configuration.
+- Classify AWS device-posture fragment headers and refresh intervals, and emit
+  payload-redacted diagnostics when posture-related control messages appear.
+- Add a CLI `-debug` option for additional payload-redacted protocol metadata.
 
 ### Changed
 

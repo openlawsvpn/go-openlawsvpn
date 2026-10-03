@@ -211,6 +211,8 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
   missing state owned by the current VPN instance
 - fix(network): preserve pre-existing routes and later administrator DNS or
   route changes during repair and disconnect cleanup
+- feat(debug): report AWS posture control-message metadata without logging
+  challenge text, fragments, tokens, or other sensitive payloads
 
 * Wed Aug 19 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.3-1
 - fix(vpn): require fresh SAML authentication when AWS rejects cached CRV1

@@ -3,6 +3,7 @@ package saml_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -20,6 +21,8 @@ func TestClassifyMsg(t *testing.T) {
 		{"AUTH_FAILED\x00", saml.MsgKindAuthFailed},
 		{"AUTH_FAILED", saml.MsgKindAuthFailed},
 		{"CR_TEXT,enter the one-time code", saml.MsgKindCRText},
+		{"AWS_CC_MSG,1791062400123456,2,0,fragment", saml.MsgKindAWSCC},
+		{"CRV1::POSTURE_CHECK_INTERVAL::300", saml.MsgKindPostureCheckInterval},
 		{"", saml.MsgKindUnknown},
 		{"HELLO", saml.MsgKindUnknown},
 	}
@@ -27,6 +30,50 @@ func TestClassifyMsg(t *testing.T) {
 		got := saml.ClassifyMsg(tc.msg)
 		if got != tc.want {
 			t.Errorf("ClassifyMsg(%q) = %v, want %v", tc.msg, got, tc.want)
+		}
+	}
+}
+
+func TestParseAWSCCMetadata(t *testing.T) {
+	const secret = "SECRET_POSTURE_FRAGMENT"
+	cm, err := saml.ParseControlMsg("AWS_CC_MSG,1791062400123456,2,1," + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.AWSCC == nil {
+		t.Fatal("AWSCC metadata is nil")
+	}
+	if cm.AWSCC.TimestampMicros != 1791062400123456 || cm.AWSCC.FragmentCount != 2 || cm.AWSCC.FragmentIndex != 1 || cm.AWSCC.FragmentBytes != len(secret) {
+		t.Fatalf("AWSCC metadata = %#v", cm.AWSCC)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", cm.AWSCC), secret) {
+		t.Fatal("AWSCC metadata disclosed fragment")
+	}
+}
+
+func TestParsePostureCheckInterval(t *testing.T) {
+	cm, err := saml.ParseControlMsg("CRV1::POSTURE_CHECK_INTERVAL::300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.PostureCheckIntervalSeconds == nil || *cm.PostureCheckIntervalSeconds != 300 {
+		t.Fatalf("interval = %#v", cm.PostureCheckIntervalSeconds)
+	}
+}
+
+func TestMalformedAWSCCIsSecretSafe(t *testing.T) {
+	const secret = "SECRET_POSTURE_FRAGMENT"
+	for _, wire := range []string{
+		"AWS_CC_MSG,bad,1,0," + secret,
+		"AWS_CC_MSG,1,0,0," + secret,
+		"AWS_CC_MSG,1,1,1," + secret,
+	} {
+		_, err := saml.ParseControlMsg(wire)
+		if err == nil {
+			t.Fatalf("ParseControlMsg(%q) succeeded", wire)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error disclosed fragment: %v", err)
 		}
 	}
 }
