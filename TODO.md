@@ -115,16 +115,18 @@ must be able to distinguish “retry transport” from “show browser again.”
 typed reauthentication outcome; CLI behavior is deterministic; and tests cover
 concurrent expiry/disconnect, cancellation, and a successful fresh Phase 1/2.
 
-### [x] M4 — Detect route and DNS drift without repairing it
+### [x] M4 — Detect route and DNS drift
 
 **Goal:** Observe when VPN-owned routes or DNS settings disappear or change and
-emit typed events. This first stage is read-only.
+emit typed events. Detection itself is read-only; restoration was added in the
+same release as the separately specified M5 ownership layer below.
 
 **Start at:** `routing/netlink.go`, `routing/netlink_darwin.go`, `dns/`,
 `client_tun_linux.go`, `client_tun_darwin.go`, `Client.cleanup`, and `event.go`.
 
-**Constraints:** Do not mutate host state in this item. Polling must stop on
-disconnect and remain cheap. Linux unit tests should use captured/synthetic
+**Constraints:** The M4 detection operation must not mutate host state. Polling
+must stop on disconnect and remain cheap. Any restoration is governed by M5's
+conservative ownership rules. Linux unit tests should use captured/synthetic
 netlink messages; privileged namespace tests belong behind the `integration`
 tag. iOS continues to delegate routes and DNS to NetworkExtension.
 

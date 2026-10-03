@@ -21,65 +21,14 @@ import (
 // the route(8) command. ifIndex is unused on macOS (the interface name is
 // looked up from the index). Requires root / sudo.
 func ApplyRoutes(opts *PushOptions, ifIndex int) error {
-	if opts == nil {
-		return nil
-	}
-
-	ifName, err := ifNameByIndex(ifIndex)
-	if err != nil {
-		return fmt.Errorf("routing: interface index %d: %w", ifIndex, err)
-	}
-
-	var defaultGW net.IP
-	if opts.Ifconfig != nil {
-		defaultGW = opts.Ifconfig.Gateway
-	}
-
-	// On macOS, utun is always IFF_POINTOPOINT. SIOCSIFDSTADDR sets the peer
-	// address but the kernel does not reliably install a /32 host route via
-	// separate ioctls (unlike the combined `ifconfig utun9 <local> <peer>`
-	// command). Add the host route explicitly so that subsequent pushed routes
-	// that use the gateway as next-hop resolve via utun instead of via the
-	// default route (en0).
-	if opts.Ifconfig != nil && defaultGW != nil {
-		if err := routeAdd(defaultGW, net.CIDRMask(32, 32), nil, ifName); err != nil {
-			// "entry exists" is fine — SIOCSIFDSTADDR may have already created it.
-			if !isRouteExists(err) {
-				return fmt.Errorf("routing: host route to gateway %s: %w", defaultGW, err)
-			}
-		}
-	}
-
-	// Explicit routes from PUSH_REPLY.
-	for _, r := range opts.Routes {
-		gw := r.Gateway
-		if gw == nil {
-			gw = defaultGW
-		}
-		if err := routeAdd(r.Network, r.Mask, gw, ifName); err != nil {
-			return fmt.Errorf("routing: add route %s: %w", r.Network, err)
-		}
-	}
-
-	// Default route (redirect-gateway).
-	if opts.RedirectGateway {
-		if err := routeAdd(net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW, ifName); err != nil {
-			return fmt.Errorf("routing: default route: %w", err)
-		}
-	}
-
-	return nil
+	_, err := ApplyRoutesOwned(opts, ifIndex)
+	return err
 }
 
-// ApplyRoutesOwned applies routes on macOS. Route ownership remains tied to
-// the utun lifecycle; the returned empty ledger prevents generic cleanup from
-// claiming routes it did not independently verify.
+// ApplyRoutesOwned applies routes on macOS and records each route only after
+// route(8) successfully creates it. If a later operation fails, the returned
+// ledger retains the earlier successful operations for conservative cleanup.
 func ApplyRoutesOwned(opts *PushOptions, ifIndex int) (*Ownership, error) {
-	if err := ApplyRoutes(opts, ifIndex); err != nil {
-		// A non-nil empty ledger prevents callers from falling back to broad
-		// destination-based cleanup after a conflict or partial failure.
-		return NewOwnership(nil, nil, nil, nil), err
-	}
 	if opts == nil {
 		return NewOwnership(nil, nil, nil, nil), nil
 	}
@@ -95,39 +44,58 @@ func ApplyRoutesOwned(opts *PushOptions, ifIndex int) (*Ownership, error) {
 	}
 	ops := make(map[string]routeOp)
 	var owned []RouteIdentity
-	addOwned := func(dst net.IP, mask net.IPMask, gw net.IP) {
+	makeOwnership := func() *Ownership {
+		return NewOwnership(owned,
+			func(destination string) (*RouteIdentity, error) {
+				op := ops[destination]
+				return lookupDarwinRouteIdentity(op.dst, op.mask)
+			},
+			func(identity RouteIdentity) error {
+				op := ops[identity.Destination]
+				return routeAdd(op.dst, op.mask, op.gw, ifName)
+			},
+			func(identity RouteIdentity) error {
+				op := ops[identity.Destination]
+				return routeDel(op.dst, op.mask, op.gw, ifName)
+			})
+	}
+	applyOwned := func(dst net.IP, mask net.IPMask, gw net.IP) error {
 		ones, _ := mask.Size()
 		identity := RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: ipStringDarwin(gw), Interface: ifIndex}
+		if err := routeAdd(dst, mask, gw, ifName); err != nil {
+			return err
+		}
 		owned = append(owned, identity)
 		ops[identity.Destination] = routeOp{identity: identity, dst: dst, mask: mask, gw: gw}
+		return nil
 	}
 	defaultGW := net.IP(nil)
 	if opts.Ifconfig != nil {
 		defaultGW = opts.Ifconfig.Gateway
+		// Keep the gateway host route outside the ledger. It is tied to the utun
+		// lifecycle and deleting it before dependent routes can make route(8)
+		// block while resolving their gateway.
+		if defaultGW != nil {
+			if err := routeAdd(defaultGW, net.CIDRMask(32, 32), nil, ifName); err != nil && !isRouteExists(err) {
+				return makeOwnership(), fmt.Errorf("routing: host route to gateway %s: %w", defaultGW, err)
+			}
+		}
 	}
 	for _, route := range opts.Routes {
 		gw := route.Gateway
 		if gw == nil {
 			gw = defaultGW
 		}
-		addOwned(route.Network, route.Mask, gw)
+		if err := applyOwned(route.Network, route.Mask, gw); err != nil {
+			return makeOwnership(), fmt.Errorf("routing: add route %s: %w", route.Network, err)
+		}
 	}
 	if opts.RedirectGateway {
-		addOwned(net.IPv4zero, net.CIDRMask(0, 32), defaultGW)
+		if err := applyOwned(net.IPv4zero, net.CIDRMask(0, 32), defaultGW); err != nil {
+			return makeOwnership(), fmt.Errorf("routing: default route: %w", err)
+		}
 	}
-	return NewOwnership(owned,
-		func(destination string) (*RouteIdentity, error) {
-			op := ops[destination]
-			return lookupDarwinRouteIdentity(op.dst, op.mask)
-		},
-		func(identity RouteIdentity) error {
-			op := ops[identity.Destination]
-			return routeAdd(op.dst, op.mask, op.gw, ifName)
-		},
-		func(identity RouteIdentity) error {
-			op := ops[identity.Destination]
-			return routeDel(op.dst, op.mask, op.gw, ifName)
-		}), nil
+	return makeOwnership(), nil
 }
 
 func lookupDarwinRouteIdentity(dst net.IP, mask net.IPMask) (*RouteIdentity, error) {
