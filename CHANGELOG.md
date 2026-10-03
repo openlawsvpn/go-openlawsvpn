@@ -18,6 +18,11 @@ canonical project history.
   `ifconfig-ipv6` profile directives.
 - Add bounded generic post-connect control-message callbacks and writes, with
   mock-server round-trip coverage.
+- Add typed CRV1 and `CR_TEXT` dynamic-authentication challenge metadata while
+  keeping challenge state, usernames, and prompt text in explicitly sensitive
+  fields.
+- Add a distinct `reauth_required` client state so applications can distinguish
+  a fresh browser flow from an ordinary transport retry.
 
 ### Changed
 
@@ -32,6 +37,11 @@ canonical project history.
 - Preserve fragmented and coalesced TLS application messages, transfer control
   ownership when a rekey becomes primary, and keep direct-auth sessions reading
   from the live TLS stream after replaying `PUSH_REPLY`.
+- Clear rejected SAML assertions synchronously and deduplicate concurrent
+  session-expiry outcomes, preventing reconnect paths from reusing consumed
+  credentials or starting multiple authentication flows.
+- Keep dynamic challenge payloads out of generic errors and session-expiry
+  classifications.
 
 ## [1.2.3] - 2026-08-19
 

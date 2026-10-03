@@ -32,6 +32,9 @@ const (
 	StateDisconnecting
 	// StateError means connection failed; Message carries the reason.
 	StateError
+	// StateReauthRequired means the server rejected the established
+	// authentication context and the application must start a fresh flow.
+	StateReauthRequired
 )
 
 // String returns a lowercase D-Bus-friendly representation of the state.
@@ -47,6 +50,8 @@ func (s ClientState) String() string {
 		return "connected"
 	case StateDisconnecting:
 		return "disconnecting"
+	case StateReauthRequired:
+		return "reauth_required"
 	case StateError:
 		return "error"
 	default:

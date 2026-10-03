@@ -201,8 +201,12 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 - compat(vpn): add AES-192-GCM, static keepalive and IPv6 profile options,
   AWS-compatible MSS defaults, and five-second reconnect backoff
 - feat(vpn): add bounded post-connect control-message callbacks and writes
+- feat(auth): classify CRV1 and CR_TEXT challenges with secret-safe typed
+  metadata and expose a distinct reauthentication-required state
 - fix(vpn): preserve negotiated cipher and control ownership across rekeys,
   honor terminal ping-exit, and retain live TLS reads after PUSH_REPLY
+- security(auth): clear rejected SAML assertions before reconnect and
+  deduplicate concurrent session-expiry outcomes
 
 * Wed Aug 19 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.3-1
 - fix(vpn): require fresh SAML authentication when AWS rejects cached CRV1

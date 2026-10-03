@@ -27,6 +27,10 @@ fixtures. Do not copy reconstructed proprietary source.
 - [x] Transfer control-message ownership when a rekeyed TLS epoch is promoted.
 - [x] Preserve live TLS reads after replaying `PUSH_REPLY` for direct-auth
   sessions.
+- [x] Classify generic CRV1 and `CR_TEXT` dynamic authentication challenges
+  with secret-safe typed metadata.
+- [x] Require a fresh authentication flow after an established session is
+  rejected, without reusing the consumed SAML assertion.
 
 ## Working on an item
 
@@ -72,7 +76,7 @@ sensitive.
 consumer can receive and reply to a message; callback and write errors have
 tests; Android AAR and Apple XCFramework generation succeeds.
 
-### [ ] M2 — Classify generic dynamic authentication challenges
+### [x] M2 — Classify generic dynamic authentication challenges
 
 **Goal:** Represent dynamic challenges as typed control messages so callers do
 not need to inspect raw `AUTH_FAILED`/`CR_TEXT` strings.
@@ -90,7 +94,7 @@ events, or logs. Existing CRV1 SAML classification must remain unchanged.
 cannot panic, errors contain classifications rather than payloads, and the
 mock server can deliver a challenge fragmented across control packets.
 
-### [ ] M3 — Fresh authentication after server-requested reauthentication
+### [x] M3 — Fresh authentication after server-requested reauthentication
 
 **Goal:** Give applications a reliable way to start a fresh authentication
 flow when an established session expires or is re-challenged.

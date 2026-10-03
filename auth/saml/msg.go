@@ -25,6 +25,9 @@ const (
 	MsgKindAuthFailedCRV1
 	// MsgKindAuthFailed is a plain "AUTH_FAILED" rejection with no SAML challenge.
 	MsgKindAuthFailed
+	// MsgKindCRText is a generic challenge text application message. Its body
+	// is authentication material and must not be logged.
+	MsgKindCRText
 )
 
 // String returns a non-sensitive description of the control-message kind.
@@ -36,6 +39,8 @@ func (k MsgKind) String() string {
 		return "AUTH_FAILED_CRV1"
 	case MsgKindAuthFailed:
 		return "AUTH_FAILED"
+	case MsgKindCRText:
+		return "CR_TEXT"
 	default:
 		return "UNKNOWN"
 	}
@@ -52,6 +57,8 @@ func ClassifyMsg(msg string) MsgKind {
 		return MsgKindAuthFailedCRV1
 	case strings.HasPrefix(msg, "AUTH_FAILED"):
 		return MsgKindAuthFailed
+	case msg == "CR_TEXT" || strings.HasPrefix(msg, "CR_TEXT,") || strings.HasPrefix(msg, "CR_TEXT:"):
+		return MsgKindCRText
 	default:
 		return MsgKindUnknown
 	}
@@ -67,6 +74,85 @@ type ControlMessage struct {
 	Raw string
 	// Challenge is non-nil for MsgKindAuthFailedCRV1 messages.
 	Challenge *Challenge
+	// DynamicChallenge describes authentication challenge metadata. Secret
+	// fields are kept in a distinct value and must not be logged.
+	DynamicChallenge *DynamicChallenge
+}
+
+// DynamicChallengeKind identifies a published OpenVPN dynamic-challenge wire
+// form without exposing its authentication material.
+type DynamicChallengeKind int
+
+const (
+	// DynamicChallengeCRV1 is an AUTH_FAILED,CRV1 challenge.
+	DynamicChallengeCRV1 DynamicChallengeKind = iota + 1
+	// DynamicChallengeText is a CR_TEXT application message.
+	DynamicChallengeText
+)
+
+// DynamicChallenge holds parsed dynamic-authentication data with safe metadata
+// separated from sensitive server-provided values.
+type DynamicChallenge struct {
+	Metadata DynamicChallengeMetadata
+	Secrets  DynamicChallengeSecrets
+}
+
+// DynamicChallengeMetadata contains fields safe for logs and telemetry.
+type DynamicChallengeMetadata struct {
+	Kind             DynamicChallengeKind
+	Flags            []string
+	ResponseRequired bool
+	Echo             bool
+	PromptPresent    bool
+}
+
+// DynamicChallengeSecrets contains untrusted authentication material. None of
+// these fields may be placed in logs, events, or generic errors.
+type DynamicChallengeSecrets struct {
+	StateID  string
+	Username string
+	Prompt   string
+}
+
+func parseDynamicCRV1(msg string) (*DynamicChallenge, error) {
+	const prefix = "AUTH_FAILED,CRV1:"
+	if !strings.HasPrefix(msg, prefix) {
+		return nil, fmt.Errorf("saml: not a CRV1 dynamic challenge")
+	}
+	fields := strings.SplitN(msg[len(prefix):], ":", 4)
+	if len(fields) != 4 {
+		return nil, fmt.Errorf("saml: malformed CRV1 dynamic challenge")
+	}
+	if fields[1] == "" {
+		return nil, fmt.Errorf("saml: malformed CRV1 dynamic challenge (empty state)")
+	}
+	d := &DynamicChallenge{
+		Metadata: DynamicChallengeMetadata{
+			Kind:          DynamicChallengeCRV1,
+			Flags:         splitChallengeFlags(fields[0]),
+			PromptPresent: fields[3] != "",
+		},
+		Secrets: DynamicChallengeSecrets{StateID: fields[1], Username: fields[2], Prompt: fields[3]},
+	}
+	for _, flag := range d.Metadata.Flags {
+		switch flag {
+		case "R":
+			d.Metadata.ResponseRequired = true
+		case "E":
+			d.Metadata.Echo = true
+		}
+	}
+	return d, nil
+}
+
+func splitChallengeFlags(value string) []string {
+	var flags []string
+	for _, flag := range strings.Split(value, ",") {
+		if flag == "R" || flag == "E" {
+			flags = append(flags, flag)
+		}
+	}
+	return flags
 }
 
 // ParseControlMsg classifies and, for CRV1 messages, fully parses a raw
@@ -77,11 +163,25 @@ func ParseControlMsg(msg string) (*ControlMessage, error) {
 
 	cm := &ControlMessage{Kind: kind, Raw: stripped}
 	if kind == MsgKindAuthFailedCRV1 {
+		dynamic, err := parseDynamicCRV1(stripped)
+		if err != nil {
+			return nil, err
+		}
+		cm.DynamicChallenge = dynamic
 		ch, err := ParseCRV1(stripped)
 		if err != nil {
 			return nil, err
 		}
 		cm.Challenge = ch
+	} else if kind == MsgKindCRText {
+		prompt := ""
+		if len(stripped) > len("CR_TEXT") {
+			prompt = stripped[len("CR_TEXT")+1:]
+		}
+		cm.DynamicChallenge = &DynamicChallenge{
+			Metadata: DynamicChallengeMetadata{Kind: DynamicChallengeText, PromptPresent: prompt != ""},
+			Secrets:  DynamicChallengeSecrets{Prompt: prompt},
+		}
 	}
 	return cm, nil
 }
@@ -181,7 +281,10 @@ func WritePhase2Credentials(w io.Writer, credential string) error {
 // VPN session has expired and must be re-authenticated via a new SAML flow.
 type SessionExpiredError struct {
 	// Msg is the non-sensitive classification of the AUTH_FAILED message.
+	// Deprecated: use Kind.
 	Msg string
+	// Kind is the non-sensitive classification of the server outcome.
+	Kind MsgKind
 }
 
 // Error implements the error interface.
@@ -197,7 +300,7 @@ func (e *SessionExpiredError) Error() string {
 func WrapAuthFailed(msg string, sessionActive bool) error {
 	kind := ClassifyMsg(msg).String()
 	if sessionActive {
-		return &SessionExpiredError{Msg: kind}
+		return &SessionExpiredError{Msg: kind, Kind: ClassifyMsg(msg)}
 	}
 	return fmt.Errorf("saml: authentication failed (%s)", kind)
 }

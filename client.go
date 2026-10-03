@@ -223,6 +223,10 @@ type Client struct {
 	// Disconnect. Transient link failures preserve credentials only long enough
 	// for the controlled Reconnect path.
 	clearCredentialsOnCleanup bool
+	// reauthRequired is set once when an established control channel rejects
+	// authentication. It prevents concurrent epoch monitors and keepalive
+	// failure from starting or reporting duplicate authentication flows.
+	reauthRequired bool
 
 	// SAMLTokenFn is called during Connect when the server issues a SAML/CRV1
 	// challenge. The callback must open challenge.URL in a browser, wait for
@@ -253,6 +257,10 @@ type Client struct {
 	// server-provided data and must not be logged without sanitization. The
 	// callback runs from an internal goroutine and must not block.
 	ControlMessageFn ControlMessageFn
+	// TypedControlMessageFn, if set, receives classified non-authentication
+	// control messages. Challenge text and state fields are sensitive; callers
+	// must use only the explicit metadata fields for logs and telemetry.
+	TypedControlMessageFn func(*saml.ControlMessage)
 
 	// awsFormat is true when the profile targets AWS Client VPN (FlowAWSSSO).
 	// It selects the AWS-patched key_method_2 wire format (uint32_be length
@@ -329,6 +337,9 @@ func New(p *profile.Profile) *Client {
 //
 // Connect is not safe for concurrent use.
 func (c *Client) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	c.reauthRequired = false
+	c.mu.Unlock()
 	flow := c.prof.DetectFlow()
 	c.awsFormat = flow == profile.FlowAWSSSO
 
@@ -1004,11 +1015,25 @@ func (c *Client) Done() <-chan struct{} {
 // Reconnect is not safe for concurrent use.
 func (c *Client) Reconnect(ctx context.Context) error {
 	c.mu.Lock()
+	reauthRequired := c.reauthRequired
+	var expired *saml.SessionExpiredError
+	if errors.As(c.doneErr, &expired) {
+		reauthRequired = true
+	}
+	if reauthRequired {
+		c.clearCredentialsLocked()
+	}
 	token := c.cachedSAMLToken
 	expiry := c.cachedSAMLExpiry
 	stateID := c.cachedStateID
 	serverIP := c.cachedPhase1IP
 	c.mu.Unlock()
+	if reauthRequired {
+		c.disconnect(false)   //nolint:errcheck
+		c.WaitForDisconnect() //nolint:errcheck
+		c.reset()
+		return ErrReauthRequired
+	}
 
 	const (
 		backoffBase      = 5 * time.Second
@@ -2661,7 +2686,11 @@ func (c *Client) sessionMonitorFor(ctx context.Context, rw io.Reader) {
 	mon := saml.NewSessionMonitorWithHandler(rw, func(message *saml.ControlMessage) {
 		c.mu.Lock()
 		onMessage := c.ControlMessageFn
+		onTypedMessage := c.TypedControlMessageFn
 		c.mu.Unlock()
+		if onTypedMessage != nil {
+			onTypedMessage(message)
+		}
 		if onMessage != nil {
 			onMessage(message.Raw)
 		}
@@ -2674,10 +2703,22 @@ func (c *Client) sessionMonitorFor(ctx context.Context, rw io.Reader) {
 			return
 		}
 		c.mu.Lock()
+		var expired *saml.SessionExpiredError
+		isReauth := errors.As(err, &expired)
+		firstReauth := isReauth && !c.reauthRequired
+		if isReauth {
+			c.reauthRequired = true
+			// A rejected assertion is consumed. Clear it synchronously so a
+			// simultaneous keepalive/reconnect path cannot submit it again.
+			c.clearCredentialsLocked()
+		}
 		if c.doneErr == nil {
 			c.doneErr = err
 		}
 		c.mu.Unlock()
+		if firstReauth {
+			c.emit(Event{Type: EventStateChanged, State: StateReauthRequired})
+		}
 		c.disconnect(true) //nolint:errcheck
 	}
 }

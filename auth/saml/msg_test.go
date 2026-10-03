@@ -19,6 +19,7 @@ func TestClassifyMsg(t *testing.T) {
 		{"AUTH_FAILED,CRV1:R:state::https://idp.example.com\x00", saml.MsgKindAuthFailedCRV1},
 		{"AUTH_FAILED\x00", saml.MsgKindAuthFailed},
 		{"AUTH_FAILED", saml.MsgKindAuthFailed},
+		{"CR_TEXT,enter the one-time code", saml.MsgKindCRText},
 		{"", saml.MsgKindUnknown},
 		{"HELLO", saml.MsgKindUnknown},
 	}
@@ -27,6 +28,42 @@ func TestClassifyMsg(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("ClassifyMsg(%q) = %v, want %v", tc.msg, got, tc.want)
 		}
+	}
+}
+
+func TestParseDynamicChallenges(t *testing.T) {
+	const secret = "SECRET_PROMPT_CANARY"
+	cm, err := saml.ParseControlMsg("AUTH_FAILED,CRV1:R,E:state:user:" + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Kind != saml.MsgKindAuthFailedCRV1 || cm.DynamicChallenge == nil {
+		t.Fatalf("dynamic challenge = %#v", cm)
+	}
+	if !cm.DynamicChallenge.Metadata.ResponseRequired || !cm.DynamicChallenge.Metadata.Echo || !cm.DynamicChallenge.Metadata.PromptPresent {
+		t.Fatalf("metadata = %#v", cm.DynamicChallenge)
+	}
+	if cm.DynamicChallenge.Secrets.Prompt != secret {
+		t.Fatal("secret prompt was not preserved in the sensitive field")
+	}
+
+	text, err := saml.ParseControlMsg("CR_TEXT," + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.Kind != saml.MsgKindCRText || text.DynamicChallenge == nil || text.DynamicChallenge.Secrets.Prompt != secret {
+		t.Fatalf("CR_TEXT = %#v", text)
+	}
+}
+
+func TestMalformedDynamicChallengeErrorIsSecretSafe(t *testing.T) {
+	const secret = "SECRET_CHALLENGE_CANARY"
+	_, err := saml.ParseControlMsg("AUTH_FAILED,CRV1:R:" + secret)
+	if err == nil {
+		t.Fatal("expected malformed challenge error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error disclosed challenge: %v", err)
 	}
 }
 
@@ -73,6 +110,26 @@ func TestReadControlMsg(t *testing.T) {
 	}
 	if cm.Kind != saml.MsgKindPushReply {
 		t.Errorf("Kind = %v", cm.Kind)
+	}
+}
+
+type oneByteReader struct{ r *strings.Reader }
+
+func (r oneByteReader) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return r.r.Read(p)
+}
+
+func TestReadDynamicChallengeFragmented(t *testing.T) {
+	const wire = "CR_TEXT,fragmented secret prompt\x00"
+	cm, err := saml.ReadControlMsg(oneByteReader{r: strings.NewReader(wire)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Kind != saml.MsgKindCRText || cm.DynamicChallenge == nil || !cm.DynamicChallenge.Metadata.PromptPresent {
+		t.Fatalf("message = %#v", cm)
 	}
 }
 

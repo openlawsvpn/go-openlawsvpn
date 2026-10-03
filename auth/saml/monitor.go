@@ -103,7 +103,7 @@ func (m *SessionMonitor) run(ctx context.Context) {
 			}
 			switch res.cm.Kind {
 			case MsgKindAuthFailed, MsgKindAuthFailedCRV1:
-				m.done <- &SessionExpiredError{Msg: res.cm.Raw}
+				m.done <- &SessionExpiredError{Msg: res.cm.Kind.String(), Kind: res.cm.Kind}
 				return
 			default:
 				// Unknown mid-session message (e.g. CR_TEXT, AWS_CC_MSG,
