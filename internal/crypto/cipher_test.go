@@ -15,6 +15,7 @@ func TestParseSuite(t *testing.T) {
 	}{
 		{"AES-256-GCM", crypto.SuiteAES256GCM, true},
 		{"AES-128-GCM", crypto.SuiteAES128GCM, true},
+		{"AES-192-GCM", crypto.SuiteAES192GCM, true},
 		{"AES-256-CBC", crypto.SuiteAES256CBC, true},
 		{"CHACHA20", 0, false},
 	}
@@ -52,6 +53,25 @@ func TestGCMSealOpen(t *testing.T) {
 	}
 	if !bytes.Equal(pt, plaintext) {
 		t.Fatalf("roundtrip mismatch: got %q want %q", pt, plaintext)
+	}
+}
+
+func TestGCMSealOpenAES192(t *testing.T) {
+	key := bytes.Repeat([]byte{0xA5}, 24)
+	tail := bytes.Repeat([]byte{0x5A}, 8)
+
+	gc, err := crypto.NewGCMCipher(key, tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plaintext := []byte("aes-192-gcm data channel")
+	ciphertext := gc.Seal(7, plaintext, []byte("authenticated header"))
+	got, err := gc.Open(7, ciphertext, []byte("authenticated header"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("roundtrip mismatch: got %q want %q", got, plaintext)
 	}
 }
 

@@ -14,6 +14,10 @@ const (
 	EventStateChanged
 	// EventStatsUpdate carries a traffic statistics snapshot.
 	EventStatsUpdate
+	// EventRouteDrift reports a missing or changed VPN-owned route.
+	EventRouteDrift
+	// EventDNSDrift reports missing or changed VPN-owned DNS configuration.
+	EventDNSDrift
 )
 
 // ClientState is the connection lifecycle state reported via events.
@@ -32,6 +36,9 @@ const (
 	StateDisconnecting
 	// StateError means connection failed; Message carries the reason.
 	StateError
+	// StateReauthRequired means the server rejected the established
+	// authentication context and the application must start a fresh flow.
+	StateReauthRequired
 )
 
 // String returns a lowercase D-Bus-friendly representation of the state.
@@ -47,6 +54,8 @@ func (s ClientState) String() string {
 		return "connected"
 	case StateDisconnecting:
 		return "disconnecting"
+	case StateReauthRequired:
+		return "reauth_required"
 	case StateError:
 		return "error"
 	default:
@@ -62,12 +71,18 @@ type Event struct {
 	// State is set when Type == EventStateChanged.
 	State ClientState
 
-	// Message carries a log line (EventLog), SAML URL (StateWaitingSAML),
-	// error description (StateError), or assigned tunnel IP (StateConnected).
+	// Message carries a log line (EventLog), error description (StateError),
+	// assigned tunnel IP (StateConnected), or drift classification. SAML URLs
+	// and other sensitive values are never carried here.
 	Message string
 
 	// ServerIP is the VPN server IP (set when State == StateConnected).
 	ServerIP string
+
+	// Resource identifies the route destination or DNS resource for a drift
+	// event. Message contains only a non-sensitive outcome classification such
+	// as "restored", "missing", or "changed".
+	Resource string
 
 	// Stats is set when Type == EventStatsUpdate.
 	Stats Stats
@@ -80,3 +95,8 @@ type Event struct {
 // It is called from internal goroutines; implementations must not block.
 // Set Client.EventFn before calling Connect.
 type EventFn func(Event)
+
+// ControlMessageFn receives a non-authentication application message from the
+// TLS control channel. Implementations must not block and must treat the
+// message as untrusted, potentially sensitive server input.
+type ControlMessageFn func(message string)

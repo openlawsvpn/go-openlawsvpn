@@ -5,7 +5,7 @@
 //
 //	[opcode|keyid (1B)][peer_id (3B)][packet_id (4B)][ciphertext+GCM-tag]
 //
-// For AES-256-GCM the AAD for authentication is the 4-byte header
+// For AES-GCM the AAD for authentication is the 4-byte header
 // (opcode+peer_id) and the first 4 bytes after it (packet_id).
 //
 // P_DATA_V2 wire layout — CBC mode:
@@ -50,11 +50,11 @@ type Channel struct {
 	replaySet bool // true once any packet has been received
 }
 
-// New creates a Channel using AES-256-GCM for both directions.
+// New creates a Channel using AES-GCM for both directions.
 //
 //   - peerID:  3-byte peer identifier from the server (0 for first connection)
 //   - keyID:   key slot index (0–7)
-//   - txKey:   cipher key for the send direction (32 bytes for AES-256-GCM)
+//   - txKey:   cipher key for the send direction (16, 24, or 32 bytes)
 //   - txIV:    implicit IV for the send direction (12 bytes)
 //   - rxKey:   cipher key for the receive direction
 //   - rxIV:    implicit IV for the receive direction
@@ -128,8 +128,9 @@ func (c *Channel) Encrypt(plaintext []byte) ([]byte, error) {
 // AAD = header(4B) + packet_id(4B)
 //
 // Reference: openvpn3-core crypto/crypto_aead.hpp encrypt() sample comment:
-//   48000001 00000005 7e7046bd 444a7e28 cc6387b1 64a4d6c1 380275a...
-//   [ OP32 ] [seq # ] [             auth tag            ] [ payload ... ]
+//
+//	48000001 00000005 7e7046bd 444a7e28 cc6387b1 64a4d6c1 380275a...
+//	[ OP32 ] [seq # ] [             auth tag            ] [ payload ... ]
 func (c *Channel) encryptGCM(header []byte, seq uint32, plaintext []byte) ([]byte, error) {
 	// AAD = header || packet_id (both authenticated but not encrypted)
 	var seqBuf [4]byte

@@ -318,6 +318,80 @@ func TestParseMSSFixInvalid(t *testing.T) {
 	}
 }
 
+func TestParseStaticKeepalive(t *testing.T) {
+	p, err := profile.ParseString("remote h 443\nkeepalive 7 30\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.PingInterval != 7 || p.PingRestart != 30 || p.PingExit != 0 {
+		t.Fatalf("keepalive = (%d, %d, %d), want (7, 30, 0)", p.PingInterval, p.PingRestart, p.PingExit)
+	}
+}
+
+func TestParseStaticPingTimeoutLastOptionWins(t *testing.T) {
+	tests := []struct {
+		name        string
+		directives  string
+		wantRestart int
+		wantExit    int
+	}{
+		{name: "restart last", directives: "ping-exit 20\nping-restart 30\n", wantRestart: 30},
+		{name: "exit last", directives: "ping-restart 30\nping-exit 20\n", wantExit: 20},
+		{name: "keepalive resets exit", directives: "ping-exit 20\nkeepalive 8 40\n", wantRestart: 40},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := profile.ParseString("remote h 443\nping 5\n" + tt.directives)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.PingRestart != tt.wantRestart || p.PingExit != tt.wantExit {
+				t.Fatalf("timeouts = (restart=%d, exit=%d), want (%d, %d)", p.PingRestart, p.PingExit, tt.wantRestart, tt.wantExit)
+			}
+		})
+	}
+}
+
+func TestParseStaticKeepaliveInvalid(t *testing.T) {
+	for _, directive := range []string{
+		"ping", "ping 0", "ping-restart -1", "ping-exit nope",
+		"keepalive 10", "keepalive 0 20", "keepalive 10 0",
+	} {
+		if _, err := profile.ParseString("remote h 443\n" + directive + "\n"); err == nil {
+			t.Errorf("expected error for %q", directive)
+		}
+	}
+}
+
+func TestParseStaticIfconfigIPv6(t *testing.T) {
+	p, err := profile.ParseString("remote h 443\nifconfig-ipv6 2001:db8::2/64 2001:db8::1\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Ifconfig6 == nil {
+		t.Fatal("Ifconfig6 is nil")
+	}
+	if got := p.Ifconfig6.Local.String(); got != "2001:db8::2" {
+		t.Errorf("local = %q", got)
+	}
+	if p.Ifconfig6.Prefix != 64 {
+		t.Errorf("prefix = %d, want 64", p.Ifconfig6.Prefix)
+	}
+	if got := p.Ifconfig6.Gateway.String(); got != "2001:db8::1" {
+		t.Errorf("gateway = %q", got)
+	}
+}
+
+func TestParseStaticIfconfigIPv6Invalid(t *testing.T) {
+	for _, directive := range []string{
+		"ifconfig-ipv6", "ifconfig-ipv6 10.0.0.2/24", "ifconfig-ipv6 2001:db8::2/64 10.0.0.1",
+	} {
+		if _, err := profile.ParseString("remote h 443\n" + directive + "\n"); err == nil {
+			t.Errorf("expected error for %q", directive)
+		}
+	}
+}
+
 func TestAuthFederateForcesSAMLFlow(t *testing.T) {
 	p, err := profile.ParseString("remote vpn.example.test 443\nauth-federate\n")
 	if err != nil {

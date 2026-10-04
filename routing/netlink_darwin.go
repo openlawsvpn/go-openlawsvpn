@@ -21,54 +21,120 @@ import (
 // the route(8) command. ifIndex is unused on macOS (the interface name is
 // looked up from the index). Requires root / sudo.
 func ApplyRoutes(opts *PushOptions, ifIndex int) error {
-	if opts == nil {
-		return nil
-	}
+	_, err := ApplyRoutesOwned(opts, ifIndex)
+	return err
+}
 
+// ApplyRoutesOwned applies routes on macOS and records each route only after
+// route(8) successfully creates it. If a later operation fails, the returned
+// ledger retains the earlier successful operations for conservative cleanup.
+func ApplyRoutesOwned(opts *PushOptions, ifIndex int) (*Ownership, error) {
+	if opts == nil {
+		return NewOwnership(nil, nil, nil, nil), nil
+	}
 	ifName, err := ifNameByIndex(ifIndex)
 	if err != nil {
-		return fmt.Errorf("routing: interface index %d: %w", ifIndex, err)
+		return nil, err
 	}
-
-	var defaultGW net.IP
+	type routeOp struct {
+		identity RouteIdentity
+		dst      net.IP
+		mask     net.IPMask
+		gw       net.IP
+	}
+	ops := make(map[string]routeOp)
+	var owned []RouteIdentity
+	makeOwnership := func() *Ownership {
+		return NewOwnership(owned,
+			func(destination string) (*RouteIdentity, error) {
+				op := ops[destination]
+				return lookupDarwinRouteIdentity(op.dst, op.mask)
+			},
+			func(identity RouteIdentity) error {
+				op := ops[identity.Destination]
+				return routeAdd(op.dst, op.mask, op.gw, ifName)
+			},
+			func(identity RouteIdentity) error {
+				op := ops[identity.Destination]
+				return routeDel(op.dst, op.mask, op.gw, ifName)
+			})
+	}
+	applyOwned := func(dst net.IP, mask net.IPMask, gw net.IP) error {
+		ones, _ := mask.Size()
+		identity := RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: ipStringDarwin(gw), Interface: ifIndex}
+		if err := routeAdd(dst, mask, gw, ifName); err != nil {
+			return err
+		}
+		owned = append(owned, identity)
+		ops[identity.Destination] = routeOp{identity: identity, dst: dst, mask: mask, gw: gw}
+		return nil
+	}
+	defaultGW := net.IP(nil)
 	if opts.Ifconfig != nil {
 		defaultGW = opts.Ifconfig.Gateway
-	}
-
-	// On macOS, utun is always IFF_POINTOPOINT. SIOCSIFDSTADDR sets the peer
-	// address but the kernel does not reliably install a /32 host route via
-	// separate ioctls (unlike the combined `ifconfig utun9 <local> <peer>`
-	// command). Add the host route explicitly so that subsequent pushed routes
-	// that use the gateway as next-hop resolve via utun instead of via the
-	// default route (en0).
-	if opts.Ifconfig != nil && defaultGW != nil {
-		if err := routeAdd(defaultGW, net.CIDRMask(32, 32), nil, ifName); err != nil {
-			// "entry exists" is fine — SIOCSIFDSTADDR may have already created it.
-			if !isRouteExists(err) {
-				return fmt.Errorf("routing: host route to gateway %s: %w", defaultGW, err)
+		// Keep the gateway host route outside the ledger. It is tied to the utun
+		// lifecycle and deleting it before dependent routes can make route(8)
+		// block while resolving their gateway.
+		if defaultGW != nil {
+			if err := routeAdd(defaultGW, net.CIDRMask(32, 32), nil, ifName); err != nil && !isRouteExists(err) {
+				return makeOwnership(), fmt.Errorf("routing: host route to gateway %s: %w", defaultGW, err)
 			}
 		}
 	}
-
-	// Explicit routes from PUSH_REPLY.
-	for _, r := range opts.Routes {
-		gw := r.Gateway
+	for _, route := range opts.Routes {
+		gw := route.Gateway
 		if gw == nil {
 			gw = defaultGW
 		}
-		if err := routeAdd(r.Network, r.Mask, gw, ifName); err != nil {
-			return fmt.Errorf("routing: add route %s: %w", r.Network, err)
+		if err := applyOwned(route.Network, route.Mask, gw); err != nil {
+			return makeOwnership(), fmt.Errorf("routing: add route %s: %w", route.Network, err)
 		}
 	}
-
-	// Default route (redirect-gateway).
 	if opts.RedirectGateway {
-		if err := routeAdd(net.IPv4(0, 0, 0, 0), net.CIDRMask(0, 32), defaultGW, ifName); err != nil {
-			return fmt.Errorf("routing: default route: %w", err)
+		if err := applyOwned(net.IPv4zero, net.CIDRMask(0, 32), defaultGW); err != nil {
+			return makeOwnership(), fmt.Errorf("routing: default route: %w", err)
 		}
 	}
+	return makeOwnership(), nil
+}
 
-	return nil
+func lookupDarwinRouteIdentity(dst net.IP, mask net.IPMask) (*RouteIdentity, error) {
+	out, err := exec.Command("/sbin/route", "-n", "get", dst.String()).CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(out), "not in table") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var gateway, ifName string
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		switch strings.TrimSuffix(parts[0], ":") {
+		case "gateway":
+			gateway = parts[1]
+		case "interface":
+			ifName = parts[1]
+		}
+	}
+	if ifName == "" {
+		return nil, nil
+	}
+	ifIndex, err := InterfaceIndex(ifName)
+	if err != nil {
+		return nil, err
+	}
+	ones, _ := mask.Size()
+	return &RouteIdentity{Destination: fmt.Sprintf("%s/%d", dst.To4(), ones), Gateway: gateway, Interface: ifIndex}, nil
+}
+
+func ipStringDarwin(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
 }
 
 // DeleteRoutes removes routes added by ApplyRoutes. Errors are collected and
@@ -142,17 +208,23 @@ func LookupGateway(dst net.IP) (net.IP, error) {
 // is never routed through the TUN after redirect-gateway is applied.
 // A nil gateway is a no-op (direct link needs no bypass).
 func AddBypassRoute(serverIP, gw net.IP) error {
+	_, err := AddBypassRouteOwned(serverIP, gw)
+	return err
+}
+
+// AddBypassRouteOwned adds a bypass route and reports whether it was created.
+func AddBypassRouteOwned(serverIP, gw net.IP) (bool, error) {
 	if gw == nil {
-		return nil
+		return false, nil
 	}
 	err := routeAdd(serverIP, net.CIDRMask(32, 32), gw, "")
 	if isRouteExists(err) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
+		return false, fmt.Errorf("routing: add bypass route for %s: %w", serverIP, err)
 	}
-	return nil
+	return true, nil
 }
 
 // DeleteBypassRoute removes the /32 bypass route added by AddBypassRoute.

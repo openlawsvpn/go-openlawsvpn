@@ -70,6 +70,10 @@ type SAMLChallenge struct {
 // with a new Phase 1 session. The caller must run the full browser flow again.
 var ErrReauthRequired = fmt.Errorf("vpn: SAML re-authentication required: token rejected by server")
 
+// ErrPingExit is the terminal disconnect reason produced when a ping-exit
+// timeout expires. Callers must not automatically reconnect this session.
+var ErrPingExit = errors.New("vpn: ping-exit timeout")
+
 // errPhase2CredentialsRejected identifies an AWS authentication rejection
 // while reconnecting with cached CRV1 credentials. It remains internal because
 // callers receive ErrReauthRequired instead.
@@ -164,19 +168,24 @@ type Client struct {
 	// Without this lock two frames can be interleaved mid-write, which corrupts
 	// the peer's TCP packet stream (most visibly while a rekey is active).
 	writeMu sync.Mutex
+	// controlWriteMu serializes application messages written to the active TLS
+	// control channel by SendControlMessage.
+	controlWriteMu sync.Mutex
 	// recvExp is the next expected inbound packet_id for the initial session,
 	// used only before tlsHandshake runs. After that, recvWindow in each
 	// controlSession owns receive sequencing.
 	recvExp uint32
 
 	// data channel
-	manager    *datachannel.Manager
-	peerID     uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
-	tunDev     *tun.Device
-	pushOpts   *routing.PushOptions
-	dnsOpts    *dns.Config
-	dnsBackup  string
-	dnsBackend dns.Backend
+	manager        *datachannel.Manager
+	peerID         uint32 // 24-bit peer_id from PUSH_REPLY, connection-scoped
+	tunDev         *tun.Device
+	pushOpts       *routing.PushOptions
+	dnsOpts        *dns.Config
+	dnsBackup      string
+	dnsBackend     dns.Backend
+	routeOwnership *routing.Ownership
+	dnsOwnership   *dns.Ownership
 	// dataCh receives P_DATA_V2 wire packets from the control-channel relay
 	// goroutine (which owns all reads from rawConn).  wireToTun drains it.
 	dataCh chan []byte
@@ -188,8 +197,9 @@ type Client struct {
 	mssFixMTU int
 	// serverBypassIP / serverBypassGW hold the /32 bypass route added on Linux/macOS
 	// when redirect-gateway is active, so cleanup can remove it on disconnect.
-	serverBypassIP net.IP
-	serverBypassGW net.IP
+	serverBypassIP    net.IP
+	serverBypassGW    net.IP
+	serverBypassOwned bool
 
 	// nextKeyID is the key_id for the next renegotiated TLS session.
 	// Incremented mod 8 after each renegotiation (key_id 0 is reserved for
@@ -216,6 +226,10 @@ type Client struct {
 	// Disconnect. Transient link failures preserve credentials only long enough
 	// for the controlled Reconnect path.
 	clearCredentialsOnCleanup bool
+	// reauthRequired is set once when an established control channel rejects
+	// authentication. It prevents concurrent epoch monitors and keepalive
+	// failure from starting or reporting duplicate authentication flows.
+	reauthRequired bool
 
 	// SAMLTokenFn is called during Connect when the server issues a SAML/CRV1
 	// challenge. The callback must open challenge.URL in a browser, wait for
@@ -240,6 +254,16 @@ type Client struct {
 	// transitions, log lines, and periodic stats. Called from internal
 	// goroutines — must not block. Set before calling Connect.
 	EventFn EventFn
+
+	// ControlMessageFn, if set, receives non-authentication control-channel
+	// messages sent after the tunnel is established. Messages may contain
+	// server-provided data and must not be logged without sanitization. The
+	// callback runs from an internal goroutine and must not block.
+	ControlMessageFn ControlMessageFn
+	// TypedControlMessageFn, if set, receives classified non-authentication
+	// control messages. Challenge text and state fields are sensitive; callers
+	// must use only the explicit metadata fields for logs and telemetry.
+	TypedControlMessageFn func(*saml.ControlMessage)
 
 	// awsFormat is true when the profile targets AWS Client VPN (FlowAWSSSO).
 	// It selects the AWS-patched key_method_2 wire format (uint32_be length
@@ -289,6 +313,10 @@ func (c *Client) emit(e Event) {
 		fmt.Fprintf(os.Stderr, "%s\n", e.Message)
 	case EventStateChanged:
 		fmt.Fprintf(os.Stderr, "vpn: state → %s\n", e.State)
+	case EventRouteDrift:
+		fmt.Fprintf(os.Stderr, "vpn: route %s: %s\n", e.Message, e.Resource)
+	case EventDNSDrift:
+		fmt.Fprintf(os.Stderr, "vpn: DNS %s\n", e.Message)
 	}
 }
 
@@ -316,6 +344,9 @@ func New(p *profile.Profile) *Client {
 //
 // Connect is not safe for concurrent use.
 func (c *Client) Connect(ctx context.Context) error {
+	c.mu.Lock()
+	c.reauthRequired = false
+	c.mu.Unlock()
 	flow := c.prof.DetectFlow()
 	c.awsFormat = flow == profile.FlowAWSSSO
 
@@ -523,8 +554,12 @@ func (c *Client) connectPhase1(ctx context.Context) (*SAMLChallenge, error) {
 		c.mu.Lock()
 		c.challenge = &saml.Challenge{StateID: "__direct__"}
 		c.mu.Unlock()
-		// Preload the PUSH_REPLY so connectPhase2 can read it back.
-		c.tlsRW = &prereadRW{r: &prereadReader{data: []byte(cm.Raw + "\x00")}, w: tlsConn}
+		// Preload the PUSH_REPLY so connectPhase2 can read it back, then continue
+		// with the live TLS stream for post-connect application messages.
+		c.tlsRW = &prereadRW{
+			r: io.MultiReader(&prereadReader{data: []byte(cm.Raw + "\x00")}, tlsConn),
+			w: tlsConn,
+		}
 		return nil, nil
 	}
 
@@ -720,6 +755,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		c.setDisconnected(err)
 		return fmt.Errorf("vpn: parse PUSH_REPLY routes: %w", err)
 	}
+	applyStaticProfileOptions(pushOpts, c.prof)
 	dnsOpts, err := dns.ParsePushReply(pushRaw)
 	if err != nil {
 		c.rawConn.Close()
@@ -777,33 +813,10 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 		}
 		keyMat256 = append(km.ClientCipher, append(km.ClientHMAC, append(km.ServerCipher, km.ServerHMAC...)...)...)
 	}
-	txCipherKey := keyMat256[0:32]    // CIPHER|ENCRYPT|NORMAL = slot 0
-	txNonceTail := keyMat256[64:72]   // HMAC|ENCRYPT|NORMAL   = slot 1, first 8 bytes
-	rxCipherKey := keyMat256[128:160] // CIPHER|DECRYPT|NORMAL = slot 2
-	rxNonceTail := keyMat256[192:200] // HMAC|DECRYPT|NORMAL   = slot 3, first 8 bytes
-
 	// Select cipher from PUSH_REPLY; default to AES-256-GCM when absent.
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_data_channel_options()
-	// line ~753: validates pushed cipher against IV_CIPHERS list (we advertise
-	// AES-128-GCM, AES-192-GCM, AES-256-GCM, CHACHA20-POLY1305 in peerInfo).
-	var ch2 *datachannel.Channel
-	switch strings.ToUpper(pushOpts.Cipher) {
-	case "", "AES-256-GCM":
-		ch2, err = datachannel.New(peerID, 0, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
-	case "AES-128-GCM":
-		// Same wire format; crypto.NewGCMCipher accepts 16-byte keys.
-		ch2, err = datachannel.New(peerID, 0, txCipherKey[:16], txNonceTail, rxCipherKey[:16], rxNonceTail)
-	case "AES-256-CBC":
-		// CBC mode: cipher key + HMAC key each from separate slots.
-		// HMAC key is the full 32-byte slot (not just 8 bytes).
-		txHMAC := keyMat256[192:224] // slot 3, full 32 bytes
-		rxHMAC := keyMat256[64:96]   // slot 1, full 32 bytes
-		ch2, err = datachannel.NewCBC(peerID, 0, txCipherKey, txHMAC, rxCipherKey, rxHMAC)
-	default:
-		c.rawConn.Close()
-		c.setDisconnected(fmt.Errorf("unsupported cipher: %s", pushOpts.Cipher))
-		return fmt.Errorf("vpn: unsupported cipher pushed by server: %s", pushOpts.Cipher)
-	}
+	// line ~753: validates the pushed cipher against IV_CIPHERS.
+	ch2, err := newDataChannel(pushOpts.Cipher, peerID, 0, keyMat256)
 	if err != nil {
 		c.rawConn.Close()
 		c.setDisconnected(err)
@@ -830,7 +843,7 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	)
 
 	// Stand up the TUN interface.
-	if pushOpts.Ifconfig != nil {
+	if pushOpts.Ifconfig != nil || pushOpts.Ifconfig6 != nil {
 		var dev *tun.Device
 		if c.TUNSetup != nil {
 			// Android path: hand ifconfig JSON to VpnService.Builder, receive fd.
@@ -852,8 +865,14 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 				return tunErr
 			}
 		}
+		localIP := ""
+		if pushOpts.Ifconfig != nil {
+			localIP = pushOpts.Ifconfig.Local.String()
+		} else {
+			localIP = pushOpts.Ifconfig6.Local.String()
+		}
 		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
-			"vpn: TUN interface %s up, local=%s mtu=%d", dev.Name(), pushOpts.Ifconfig.Local, tunMTU)})
+			"vpn: TUN interface %s up, local=%s mtu=%d", dev.Name(), localIP, tunMTU)})
 		c.tunDev = dev
 	}
 
@@ -865,6 +884,8 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	assignedIP := ""
 	if pushOpts.Ifconfig != nil {
 		assignedIP = pushOpts.Ifconfig.Local.String()
+	} else if pushOpts.Ifconfig6 != nil {
+		assignedIP = pushOpts.Ifconfig6.Local.String()
 	}
 	c.mu.Unlock()
 	c.emit(Event{
@@ -891,16 +912,9 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	// Always start the loop — use server-pushed values when available, otherwise
 	// fall back to sensible defaults so dead links are always detected even when
 	// the server does not push ping/ping-restart in PUSH_REPLY.
-	pingInterval := pushOpts.PingInterval
-	pingRestart := pushOpts.PingRestart
-	if pingInterval == 0 {
-		pingInterval = 10 // send a probe every 10 s when server doesn't specify
-	}
-	if pingRestart == 0 {
-		pingRestart = 60 // declare dead after 60 s of silence when server doesn't specify
-	}
+	pingInterval, pingTimeout, pingExit := effectiveKeepalive(c.prof, pushOpts)
 	c.wg.Add(1)
-	go c.keepaliveLoop(cctx, pingInterval, pingRestart)
+	go c.keepaliveLoop(cctx, pingInterval, pingTimeout, pingExit)
 
 	// Inactive session timeout: disconnect if traffic falls below the server's threshold.
 	if pushOpts.InactiveTimeout > 0 {
@@ -916,6 +930,11 @@ func (c *Client) connectPhase2(ctx context.Context, samlToken string) error {
 	// Start session monitor.
 	c.wg.Add(1)
 	go c.sessionMonitor(cctx)
+
+	if c.routeOwnership != nil || c.dnsOwnership != nil {
+		c.wg.Add(1)
+		go c.resourceMonitor(cctx)
+	}
 
 	return nil
 }
@@ -1002,20 +1021,34 @@ func (c *Client) Done() <-chan struct{} {
 // is bound to the original AuthnRequest ID and cannot be reused with a new
 // Phase 1 session. The caller must run the full browser flow again.
 //
-// It applies exponential backoff between attempts: 1 s, 2 s, 4 s, … capped
+// It applies exponential backoff between attempts: 5 s, 10 s, 20 s, … capped
 // at 30 s. MaxReconnects limits total attempts (0 = unlimited, the default).
 //
 // Reconnect is not safe for concurrent use.
 func (c *Client) Reconnect(ctx context.Context) error {
 	c.mu.Lock()
+	reauthRequired := c.reauthRequired
+	var expired *saml.SessionExpiredError
+	if errors.As(c.doneErr, &expired) {
+		reauthRequired = true
+	}
+	if reauthRequired {
+		c.clearCredentialsLocked()
+	}
 	token := c.cachedSAMLToken
 	expiry := c.cachedSAMLExpiry
 	stateID := c.cachedStateID
 	serverIP := c.cachedPhase1IP
 	c.mu.Unlock()
+	if reauthRequired {
+		c.disconnect(false)   //nolint:errcheck
+		c.WaitForDisconnect() //nolint:errcheck
+		c.reset()
+		return ErrReauthRequired
+	}
 
 	const (
-		backoffBase      = 1 * time.Second
+		backoffBase      = 5 * time.Second
 		backoffMax       = 30 * time.Second
 		samlExpiryMargin = 30 * time.Second
 	)
@@ -1120,8 +1153,11 @@ func (c *Client) reset() {
 	c.dnsOpts = nil
 	c.dnsBackup = ""
 	c.dnsBackend = dns.BackendNone
+	c.routeOwnership = nil
+	c.dnsOwnership = nil
 	c.serverBypassIP = nil
 	c.serverBypassGW = nil
+	c.serverBypassOwned = false
 	c.phase1IP = ""
 	c.connectedAt = time.Time{}
 	// Cached credentials intentionally survive this internal reset while
@@ -1230,13 +1266,161 @@ func (c *Client) LocalIP() string {
 	c.mu.Lock()
 	opts := c.pushOpts
 	c.mu.Unlock()
-	if opts == nil || opts.Ifconfig == nil {
+	if opts == nil {
 		return ""
 	}
-	return opts.Ifconfig.Local.String()
+	if opts.Ifconfig != nil {
+		return opts.Ifconfig.Local.String()
+	}
+	if opts.Ifconfig6 != nil {
+		return opts.Ifconfig6.Local.String()
+	}
+	return ""
+}
+
+// SendControlMessage sends one application message over the established TLS
+// control channel. The NUL message terminator is added automatically.
+// SendControlMessage is safe to call concurrently with tunnel traffic.
+func (c *Client) SendControlMessage(message string) error {
+	c.controlWriteMu.Lock()
+	defer c.controlWriteMu.Unlock()
+
+	c.mu.Lock()
+	state := c.state
+	rw := c.tlsRW
+	c.mu.Unlock()
+	if state != stateTunnelUp || rw == nil {
+		return fmt.Errorf("vpn: control message requires an active tunnel")
+	}
+
+	if err := saml.WriteControlMsg(rw, message, saml.MaxControlMessageBytes); err != nil {
+		return fmt.Errorf("vpn: send control message: %w", err)
+	}
+	if cm, err := saml.ParseControlMsg(message); err == nil && cm.Kind == saml.MsgKindAWSCC {
+		c.emitControlMessageDiagnostic("sent", cm)
+	}
+	return nil
+}
+
+func (c *Client) emitControlMessageDiagnostic(direction string, message *saml.ControlMessage) {
+	if message == nil {
+		return
+	}
+	switch message.Kind {
+	case saml.MsgKindCRText:
+		payloadBytes := len(message.Raw) - len("CR_TEXT")
+		if payloadBytes > 0 {
+			payloadBytes--
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: dynamic challenge %s: kind=CR_TEXT payload_bytes=%d payload=redacted",
+			direction, payloadBytes)})
+	case saml.MsgKindAWSCC:
+		if message.AWSCC == nil {
+			return
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: device posture fragment %s: timestamp_us=%d fragments=%d index=%d payload_bytes=%d payload=redacted",
+			direction, message.AWSCC.TimestampMicros, message.AWSCC.FragmentCount,
+			message.AWSCC.FragmentIndex, message.AWSCC.FragmentBytes)})
+	case saml.MsgKindPostureCheckInterval:
+		if message.PostureCheckIntervalSeconds == nil {
+			return
+		}
+		c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+			"vpn: device posture refresh requested: interval_seconds=%d",
+			*message.PostureCheckIntervalSeconds)})
+	default:
+		if c.prof != nil && c.prof.Verb >= 4 {
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf(
+				"vpn: control message %s: kind=%s bytes=%d payload=redacted",
+				direction, message.Kind, len(message.Raw))})
+		}
+	}
 }
 
 // ---- internal helpers --------------------------------------------------------
+
+// applyStaticProfileOptions supplies static options only when the server did
+// not push an overriding value.
+func applyStaticProfileOptions(push *routing.PushOptions, p *profile.Profile) {
+	if push.Ifconfig6 == nil && p.Ifconfig6 != nil {
+		push.Ifconfig6 = &routing.Ifconfig6{
+			Local:   append(net.IP(nil), p.Ifconfig6.Local...),
+			Prefix:  p.Ifconfig6.Prefix,
+			Gateway: append(net.IP(nil), p.Ifconfig6.Gateway...),
+		}
+	}
+}
+
+// effectiveKeepalive merges static profile settings with pushed settings.
+// Pushed values override static values independently, while ping-exit and
+// ping-restart remain mutually exclusive.
+func effectiveKeepalive(p *profile.Profile, push *routing.PushOptions) (interval, timeout int, pingExit bool) {
+	interval = p.PingInterval
+	if p.PingExit > 0 {
+		timeout = p.PingExit
+		pingExit = true
+	} else {
+		timeout = p.PingRestart
+	}
+
+	if push.PingInterval > 0 {
+		interval = push.PingInterval
+	}
+	if push.PingExit > 0 {
+		timeout = push.PingExit
+		pingExit = true
+	} else if push.PingRestart > 0 {
+		timeout = push.PingRestart
+		pingExit = false
+	}
+
+	if interval == 0 {
+		interval = 10
+	}
+	if timeout == 0 {
+		timeout = 60
+	}
+	return interval, timeout, pingExit
+}
+
+func keepaliveTimeoutError(timeout int, pingExit bool) error {
+	if pingExit {
+		return fmt.Errorf("%w: no data for %d seconds", ErrPingExit, timeout)
+	}
+	return fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", timeout)
+}
+
+// newDataChannel constructs the negotiated data-channel cipher from the four
+// 64-byte OpenVPN key-material slots. An empty cipher name means AES-256-GCM.
+func newDataChannel(cipherName string, peerID uint32, keyID uint8, keyMaterial []byte) (*datachannel.Channel, error) {
+	if len(keyMaterial) < 256 {
+		return nil, fmt.Errorf("key material is %d bytes, want 256", len(keyMaterial))
+	}
+
+	txCipherKey := keyMaterial[0:32]
+	txNonceTail := keyMaterial[64:72]
+	rxCipherKey := keyMaterial[128:160]
+	rxNonceTail := keyMaterial[192:200]
+
+	switch strings.ToUpper(cipherName) {
+	case "", "AES-256-GCM":
+		return datachannel.New(peerID, keyID, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
+	case "AES-192-GCM":
+		return datachannel.New(peerID, keyID, txCipherKey[:24], txNonceTail, rxCipherKey[:24], rxNonceTail)
+	case "AES-128-GCM":
+		return datachannel.New(peerID, keyID, txCipherKey[:16], txNonceTail, rxCipherKey[:16], rxNonceTail)
+	case "AES-256-CBC":
+		// CBC uses the full HMAC slots in the opposite direction to the
+		// corresponding cipher slots for a normal-direction client key.
+		txHMAC := keyMaterial[192:224]
+		rxHMAC := keyMaterial[64:96]
+		return datachannel.NewCBC(peerID, keyID, txCipherKey, txHMAC, rxCipherKey, rxHMAC)
+	default:
+		return nil, fmt.Errorf("unsupported cipher pushed by server: %s", cipherName)
+	}
+}
 
 // buildTunnelOptions returns the options string sent in the key-method-2 auth
 // packet. The string is dynamic because proto and link-mtu differ between TCP
@@ -1284,8 +1468,9 @@ func buildTunnelOptions(proto profile.Proto, tunMTU int) string {
 //
 // = 30. This keeps EKM (correct key derivation) and the SAML flow while making
 // the server fall back to the classic AEAD data channel this client implements.
-// IV_CIPHERS lists GCM ciphers the client supports.
-const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=30\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM:CHACHA20-POLY1305\n"
+// IV_CIPHERS lists exactly the GCM ciphers the client implements. AWS's
+// OpenVPN3 build restricts negotiation to these FIPS-approved AES suites.
+const peerInfo = "IV_VER=3.11.6\nIV_PLAT=linux\nIV_NCP=2\nIV_TCPNL=1\nIV_PROTO=30\nIV_MTU=1600\nIV_CIPHERS=AES-128-GCM:AES-192-GCM:AES-256-GCM\n"
 
 // sendAuthPacket sends the OpenVPN key-method-2 auth packet over the TLS
 // connection immediately after the TLS handshake completes.
@@ -1964,6 +2149,7 @@ func buildTLSConfig(p *profile.Profile, extraKeyLog io.Writer) (*tls.Config, err
 func (c *Client) tunToWire(ctx context.Context) {
 	defer c.wg.Done()
 	buf := make([]byte, 65535)
+	linkWriteUnavailable := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -1986,8 +2172,19 @@ func (c *Client) tunToWire(ctx context.Context) {
 			continue
 		}
 		if werr := c.writePacket(c.rawConn, wire); werr != nil {
-			// Write failed — the TCP socket is dead. Set the disconnect reason and
-			// trigger cleanup so keepaliveLoop / sessionMonitor don't keep running.
+			// A connected UDP socket reports the loss of its physical route
+			// immediately. Keep the tunnel and its SAML-authenticated session alive
+			// while Wi-Fi is briefly unavailable; keepalive timeout remains the
+			// authority for deciding that the peer is actually gone.
+			if c.prof.Proto == profile.ProtoUDP && isTransientLinkWriteError(werr) {
+				if !linkWriteUnavailable {
+					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: transport temporarily unavailable: %v", werr)})
+					linkWriteUnavailable = true
+				}
+				continue
+			}
+			// A non-transient write failure means the transport is unusable. Set the
+			// disconnect reason and stop the other session goroutines.
 			c.mu.Lock()
 			if c.doneErr == nil {
 				c.doneErr = fmt.Errorf("vpn: tunToWire: write error: %w", werr)
@@ -1996,8 +2193,19 @@ func (c *Client) tunToWire(ctx context.Context) {
 			c.disconnect(true) //nolint:errcheck
 			return
 		}
+		if linkWriteUnavailable {
+			c.emit(Event{Type: EventLog, Message: "vpn: transport available again"})
+			linkWriteUnavailable = false
+		}
 		c.bytesSent.Add(uint64(n))
 	}
+}
+
+func isTransientLinkWriteError(err error) bool {
+	return errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETDOWN) ||
+		errors.Is(err, syscall.EADDRNOTAVAIL)
 }
 
 // clampMSS applies either an explicit MSS value from the profile/server or
@@ -2077,7 +2285,7 @@ func (c *Client) wireToTun(ctx context.Context) {
 //   - keepalive_xmit is rescheduled by send_keepalive() line ~4280.
 //   - ProtoContext::housekeeping() line ~4503: keepalive_expire reset on any recv.
 //   - is_keepalive_enabled() line ~4345 guards both send and recv paths.
-func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart int) {
+func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingTimeout int, pingExit bool) {
 	defer c.wg.Done()
 
 	pollInterval := time.Second
@@ -2110,17 +2318,22 @@ func (c *Client) keepaliveLoop(ctx context.Context, pingInterval, pingRestart in
 				}
 				nextSend = now.Add(time.Duration(pingInterval) * time.Second)
 			}
-			// Dead-link detection: disconnect if nothing received for pingRestart seconds.
-			if pingRestart > 0 {
+			// Dead-link detection: disconnect if nothing was received before the
+			// configured ping-restart or ping-exit timeout.
+			if pingTimeout > 0 {
 				last := time.Unix(0, c.lastRecv.Load())
-				if time.Since(last) >= time.Duration(pingRestart)*time.Second {
-					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: keepalive: no data for %d seconds, disconnecting", pingRestart)})
+				if time.Since(last) >= time.Duration(pingTimeout)*time.Second {
+					mode := "ping-restart"
+					if pingExit {
+						mode = "ping-exit"
+					}
+					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: keepalive: %s after %d seconds without data", mode, pingTimeout)})
 					c.mu.Lock()
 					if c.doneErr == nil {
-						c.doneErr = fmt.Errorf("vpn: keepalive timeout: no data for %d seconds", pingRestart)
+						c.doneErr = keepaliveTimeoutError(pingTimeout, pingExit)
 					}
 					c.mu.Unlock()
-					c.disconnect(true) //nolint:errcheck
+					c.disconnect(!pingExit) //nolint:errcheck
 					return
 				}
 			}
@@ -2377,14 +2590,15 @@ func (c *Client) doRekey(ctx context.Context) error {
 		}
 		rekeyMat = append(km.ClientCipher, append(km.ClientHMAC, append(km.ServerCipher, km.ServerHMAC...)...)...)
 	}
-	txCipherKey := rekeyMat[0:32]    // CIPHER|ENCRYPT|NORMAL = slot 0
-	txNonceTail := rekeyMat[64:72]   // HMAC|ENCRYPT|NORMAL   = slot 1, first 8 bytes
-	rxCipherKey := rekeyMat[128:160] // CIPHER|DECRYPT|NORMAL = slot 2
-	rxNonceTail := rekeyMat[192:200] // HMAC|DECRYPT|NORMAL   = slot 3, first 8 bytes
-
 	// Re-use the peer-id from the original PUSH_REPLY.
 	// openvpn3-core: remote_peer_id is connection-scoped, not per-key-epoch.
-	newCh, err := datachannel.New(c.peerID, keyID, txCipherKey, txNonceTail, rxCipherKey, rxNonceTail)
+	c.mu.Lock()
+	cipherName := ""
+	if c.pushOpts != nil {
+		cipherName = c.pushOpts.Cipher
+	}
+	c.mu.Unlock()
+	newCh, err := newDataChannel(cipherName, c.peerID, keyID, rekeyMat)
 	if err != nil {
 		rekeyTLS.Close()
 		return fmt.Errorf("rekey new channel: %w", err)
@@ -2400,12 +2614,9 @@ func (c *Client) doRekey(ctx context.Context) error {
 	promotionDelay := c.rekeyPromotionDelay()
 	manager.Prepare(newCh)
 	c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey ready (key_id=%d, promotion in %s)", keyID, promotionDelay)})
-	c.scheduleRekeyPromotion(ctx, manager, keyID, promotionDelay)
-
-	// Update the stored TLS connection for future EKM exports (if needed).
-	c.mu.Lock()
-	c.tlsConn = rekeyTLS
-	c.mu.Unlock()
+	c.wg.Add(1)
+	go c.sessionMonitorFor(ctx, rekeyTLS)
+	c.scheduleRekeyPromotion(ctx, manager, keyID, promotionDelay, rekeyTLS)
 
 	return nil
 }
@@ -2450,9 +2661,10 @@ func (c *Client) rekeyPromotionDelay() time.Duration {
 }
 
 // scheduleRekeyPromotion promotes the prepared data-channel key after its
-// configured transition interval. The connection context cancels this timer
-// on teardown.
-func (c *Client) scheduleRekeyPromotion(ctx context.Context, manager *datachannel.Manager, keyID uint8, delay time.Duration) {
+// configured transition interval, then transfers outbound application-message
+// ownership to that epoch's TLS channel. The connection context cancels this
+// timer on teardown.
+func (c *Client) scheduleRekeyPromotion(ctx context.Context, manager *datachannel.Manager, keyID uint8, delay time.Duration, control *tls.Conn) {
 	go func() {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -2461,6 +2673,16 @@ func (c *Client) scheduleRekeyPromotion(ctx context.Context, manager *datachanne
 			return
 		case <-timer.C:
 			if manager.Promote(keyID) {
+				// Serialize the control-channel handoff with SendControlMessage so
+				// no writer can snapshot the retired channel after promotion.
+				c.controlWriteMu.Lock()
+				c.mu.Lock()
+				if c.manager == manager && c.state == stateTunnelUp {
+					c.tlsConn = control
+					c.tlsRW = control
+				}
+				c.mu.Unlock()
+				c.controlWriteMu.Unlock()
 				c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: rekey complete (key_id=%d)", keyID)})
 			}
 		}
@@ -2525,11 +2747,33 @@ func waitForControlAcks(ctx context.Context, sess *controlSession, deadline time
 
 // sessionMonitor watches for mid-session AUTH_FAILED messages from the server.
 func (c *Client) sessionMonitor(ctx context.Context) {
+	c.mu.Lock()
+	rw := c.tlsRW
+	c.mu.Unlock()
+	c.sessionMonitorFor(ctx, rw)
+}
+
+// sessionMonitorFor watches one TLS key epoch. Rekeyed epochs start their own
+// monitor before promotion so no application message can be lost in the
+// transition between control sessions.
+func (c *Client) sessionMonitorFor(ctx context.Context, rw io.Reader) {
 	defer c.wg.Done()
-	if c.tlsRW == nil {
+	if rw == nil {
 		return
 	}
-	mon := saml.NewSessionMonitor(c.tlsRW)
+	mon := saml.NewSessionMonitorWithHandler(rw, func(message *saml.ControlMessage) {
+		c.emitControlMessageDiagnostic("received", message)
+		c.mu.Lock()
+		onMessage := c.ControlMessageFn
+		onTypedMessage := c.TypedControlMessageFn
+		c.mu.Unlock()
+		if onTypedMessage != nil {
+			onTypedMessage(message)
+		}
+		if onMessage != nil {
+			onMessage(message.Raw)
+		}
+	})
 	mon.Start(ctx)
 	select {
 	case <-ctx.Done():
@@ -2538,12 +2782,104 @@ func (c *Client) sessionMonitor(ctx context.Context) {
 			return
 		}
 		c.mu.Lock()
+		var expired *saml.SessionExpiredError
+		isReauth := errors.As(err, &expired)
+		firstReauth := isReauth && !c.reauthRequired
+		if isReauth {
+			c.reauthRequired = true
+			// A rejected assertion is consumed. Clear it synchronously so a
+			// simultaneous keepalive/reconnect path cannot submit it again.
+			c.clearCredentialsLocked()
+		}
 		if c.doneErr == nil {
 			c.doneErr = err
 		}
 		c.mu.Unlock()
+		if firstReauth {
+			c.emit(Event{Type: EventStateChanged, State: StateReauthRequired})
+		}
 		c.disconnect(true) //nolint:errcheck
 	}
+}
+
+func (c *Client) resourceMonitor(ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	reported := make(map[string]bool)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.checkResourceDrift(reported)
+		}
+	}
+}
+
+func (c *Client) checkResourceDrift(reported map[string]bool) {
+	if c.routeOwnership != nil {
+		drift, err := c.routeOwnership.Repair()
+		if err != nil {
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: route restoration failed: %v", err)})
+		}
+		active := make(map[string]bool)
+		for _, item := range drift {
+			key := fmt.Sprintf("route:%d:%s", item.Kind, item.Destination)
+			active[key] = true
+			if !reported[key] {
+				message := routeDriftName(item.Kind)
+				if item.Kind == routing.DriftMissing && err == nil {
+					message = "restored"
+				}
+				c.emit(Event{Type: EventRouteDrift, Resource: item.Destination, Message: message})
+			}
+		}
+		for key := range reported {
+			if strings.HasPrefix(key, "route:") && !active[key] {
+				delete(reported, key)
+			}
+		}
+		for key := range active {
+			reported[key] = true
+		}
+	}
+	if c.dnsOwnership != nil {
+		kind, drifted, err := c.dnsOwnership.Repair()
+		if err != nil {
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: DNS restoration failed: %v", err)})
+		}
+		key := fmt.Sprintf("dns:%d", kind)
+		if drifted && !reported[key] {
+			message := dnsDriftName(kind)
+			if kind == dns.DriftMissing && err == nil {
+				message = "restored"
+			}
+			c.emit(Event{Type: EventDNSDrift, Resource: "dns", Message: message})
+			reported[key] = true
+		}
+		if !drifted {
+			for old := range reported {
+				if strings.HasPrefix(old, "dns:") {
+					delete(reported, old)
+				}
+			}
+		}
+	}
+}
+
+func routeDriftName(kind routing.DriftKind) string {
+	if kind == routing.DriftMissing {
+		return "missing"
+	}
+	return "changed"
+}
+
+func dnsDriftName(kind dns.DriftKind) string {
+	if kind == dns.DriftMissing {
+		return "missing"
+	}
+	return "changed"
 }
 
 // cleanup tears down the TUN interface, routes, DNS, and data channel.
@@ -2554,6 +2890,7 @@ func (c *Client) cleanup() {
 		c.dataCh = nil
 	}
 	if c.tunDev != nil {
+		hadRouteOwnership := c.routeOwnership != nil
 		// Capture names/indices before closing the device.
 		tunName := c.tunDev.Name()
 		var ifIndex int
@@ -2563,8 +2900,15 @@ func (c *Client) cleanup() {
 
 		// Revert DNS while the TUN interface still exists. This explicitly removes
 		// its systemd-resolved state rather than relying on link deletion.
-		if c.dnsOpts != nil {
+		if c.dnsOwnership != nil {
+			c.dnsOwnership.Cleanup() //nolint:errcheck
+			c.dnsOwnership = nil
+		} else if c.dnsOpts != nil {
 			dns.Revert(c.dnsBackend, tunName, c.dnsBackup) //nolint:errcheck
+		}
+		if c.routeOwnership != nil {
+			c.routeOwnership.Cleanup() //nolint:errcheck
+			c.routeOwnership = nil
 		}
 
 		// Close the TUN device so the kernel removes the interface and
@@ -2576,13 +2920,14 @@ func (c *Client) cleanup() {
 		c.tunDev = nil
 
 		// Belt-and-suspenders route cleanup after the interface is gone.
-		if c.pushOpts != nil && ifIndex != 0 {
+		if c.pushOpts != nil && ifIndex != 0 && !hadRouteOwnership {
 			routing.DeleteRoutes(c.pushOpts, ifIndex) //nolint:errcheck
 		}
-		if c.serverBypassIP != nil {
+		if c.serverBypassIP != nil && c.serverBypassOwned {
 			routing.DeleteBypassRoute(c.serverBypassIP, c.serverBypassGW) //nolint:errcheck
 			c.serverBypassIP = nil
 			c.serverBypassGW = nil
+			c.serverBypassOwned = false
 		}
 	}
 }
@@ -2653,9 +2998,9 @@ func parseTunMTU(pushRaw string, profileMTU int) int {
 
 const (
 	openVPN2DefaultTunMTU = 1500
-	// OpenVPN 2 applies this mssfix value, in MTU mode, when the profile uses
-	// its default 1500-byte TUN MTU and does not set mssfix explicitly.
-	openVPN2DefaultMSSFixMTU = 1492
+	// AWS's OpenVPN3 client applies this safer mssfix value, in MTU mode, when
+	// the profile uses its default 1500-byte TUN MTU and omits mssfix.
+	awsDefaultMSSFixMTU = 1450
 
 	outerIPv4HeaderLen = 20
 	outerIPv6HeaderLen = 40
@@ -2673,8 +3018,8 @@ const (
 )
 
 // effectiveMSSFix returns either an explicit max-MSS value or an MTU from
-// which an MSS must be derived per inner IP version. It follows OpenVPN 2's
-// defaults when neither the server nor profile specified mssfix.
+// which an MSS must be derived per inner IP version. It follows the AWS
+// OpenVPN3 default when neither the server nor profile specified mssfix.
 func effectiveMSSFix(p *profile.Profile, pushedMSS, tunMTU int, proto profile.Proto, cipher string, compressionMode compress.Mode, remoteAddr net.Addr) (maxMSS, packetMTU int) {
 	if pushedMSS > 0 {
 		return pushedMSS, 0
@@ -2683,7 +3028,7 @@ func effectiveMSSFix(p *profile.Profile, pushedMSS, tunMTU int, proto profile.Pr
 		return p.MSSFix, 0
 	}
 
-	// OpenVPN 2 uses its 1492-byte mssfix default only with the default TUN
+	// AWS OpenVPN3 uses its 1450-byte mssfix default only with the default TUN
 	// MTU. A non-default (including server-reduced) TUN MTU is itself the
 	// packet budget from which the TCP MSS is derived.
 	if tunMTU != openVPN2DefaultTunMTU {
@@ -2710,7 +3055,7 @@ func effectiveMSSFix(p *profile.Profile, pushedMSS, tunMTU int, proto profile.Pr
 		dataOverhead++
 	}
 
-	return 0, openVPN2DefaultMSSFixMTU - outerIPLen - transportOverhead - dataOverhead
+	return 0, awsDefaultMSSFixMTU - outerIPLen - transportOverhead - dataOverhead
 }
 
 func addrIP(addr net.Addr) net.IP {
@@ -2762,7 +3107,11 @@ func parsePeerID(pushRaw string) uint32 {
 //	  "search_domains": ["corp.example"],
 //	  "route_domains": ["internal.example"],
 //	  "routes":  [{"network":"10.0.0.0","mask":"255.255.0.0"}],
-//	  "redirect_gateway": false
+//	  "local6": "2001:db8::2",
+//	  "prefix6": 64,
+//	  "gateway6": "2001:db8::1",
+//	  "redirect_gateway": false,
+//	  "redirect_gateway6": false
 //	}
 func buildIfconfigJSON(push *routing.PushOptions, dnsOpts *dns.Config, mtu int) string {
 	type routeJSON struct {
@@ -2770,8 +3119,16 @@ func buildIfconfigJSON(push *routing.PushOptions, dnsOpts *dns.Config, mtu int) 
 		Mask    string `json:"mask"`
 	}
 	m := map[string]any{
-		"mtu":              mtu,
-		"redirect_gateway": push.RedirectGateway,
+		"mtu":               mtu,
+		"redirect_gateway":  push.RedirectGateway,
+		"redirect_gateway6": push.RedirectGateway6,
+	}
+	if push.Ifconfig6 != nil {
+		m["local6"] = push.Ifconfig6.Local.String()
+		m["prefix6"] = push.Ifconfig6.Prefix
+		if push.Ifconfig6.Gateway != nil {
+			m["gateway6"] = push.Ifconfig6.Gateway.String()
+		}
 	}
 	if push.Ifconfig != nil {
 		m["local"] = push.Ifconfig.Local.String()
@@ -2950,8 +3307,8 @@ func (r *prereadReader) Read(b []byte) (int, error) {
 	return n, nil
 }
 
-// prereadRW combines a preread io.Reader with a writer.
-// Reads drain the preread first, then fall through to an empty reader.
+// prereadRW combines a reader (normally a replay prefix followed by the live
+// TLS stream) with its writer.
 type prereadRW struct {
 	r io.Reader
 	w io.Writer

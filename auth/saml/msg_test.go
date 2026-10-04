@@ -3,6 +3,7 @@ package saml_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,6 +20,9 @@ func TestClassifyMsg(t *testing.T) {
 		{"AUTH_FAILED,CRV1:R:state::https://idp.example.com\x00", saml.MsgKindAuthFailedCRV1},
 		{"AUTH_FAILED\x00", saml.MsgKindAuthFailed},
 		{"AUTH_FAILED", saml.MsgKindAuthFailed},
+		{"CR_TEXT,enter the one-time code", saml.MsgKindCRText},
+		{"AWS_CC_MSG,1791062400123456,2,0,fragment", saml.MsgKindAWSCC},
+		{"CRV1::POSTURE_CHECK_INTERVAL::300", saml.MsgKindPostureCheckInterval},
 		{"", saml.MsgKindUnknown},
 		{"HELLO", saml.MsgKindUnknown},
 	}
@@ -27,6 +31,86 @@ func TestClassifyMsg(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("ClassifyMsg(%q) = %v, want %v", tc.msg, got, tc.want)
 		}
+	}
+}
+
+func TestParseAWSCCMetadata(t *testing.T) {
+	const secret = "SECRET_POSTURE_FRAGMENT"
+	cm, err := saml.ParseControlMsg("AWS_CC_MSG,1791062400123456,2,1," + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.AWSCC == nil {
+		t.Fatal("AWSCC metadata is nil")
+	}
+	if cm.AWSCC.TimestampMicros != 1791062400123456 || cm.AWSCC.FragmentCount != 2 || cm.AWSCC.FragmentIndex != 1 || cm.AWSCC.FragmentBytes != len(secret) {
+		t.Fatalf("AWSCC metadata = %#v", cm.AWSCC)
+	}
+	if strings.Contains(fmt.Sprintf("%#v", cm.AWSCC), secret) {
+		t.Fatal("AWSCC metadata disclosed fragment")
+	}
+}
+
+func TestParsePostureCheckInterval(t *testing.T) {
+	cm, err := saml.ParseControlMsg("CRV1::POSTURE_CHECK_INTERVAL::300")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.PostureCheckIntervalSeconds == nil || *cm.PostureCheckIntervalSeconds != 300 {
+		t.Fatalf("interval = %#v", cm.PostureCheckIntervalSeconds)
+	}
+}
+
+func TestMalformedAWSCCIsSecretSafe(t *testing.T) {
+	const secret = "SECRET_POSTURE_FRAGMENT"
+	for _, wire := range []string{
+		"AWS_CC_MSG,bad,1,0," + secret,
+		"AWS_CC_MSG,1,0,0," + secret,
+		"AWS_CC_MSG,1,1,1," + secret,
+	} {
+		_, err := saml.ParseControlMsg(wire)
+		if err == nil {
+			t.Fatalf("ParseControlMsg(%q) succeeded", wire)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error disclosed fragment: %v", err)
+		}
+	}
+}
+
+func TestParseDynamicChallenges(t *testing.T) {
+	const secret = "SECRET_PROMPT_CANARY"
+	cm, err := saml.ParseControlMsg("AUTH_FAILED,CRV1:R,E:state:user:" + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Kind != saml.MsgKindAuthFailedCRV1 || cm.DynamicChallenge == nil {
+		t.Fatalf("dynamic challenge = %#v", cm)
+	}
+	if !cm.DynamicChallenge.Metadata.ResponseRequired || !cm.DynamicChallenge.Metadata.Echo || !cm.DynamicChallenge.Metadata.PromptPresent {
+		t.Fatalf("metadata = %#v", cm.DynamicChallenge)
+	}
+	if cm.DynamicChallenge.Secrets.Prompt != secret {
+		t.Fatal("secret prompt was not preserved in the sensitive field")
+	}
+
+	text, err := saml.ParseControlMsg("CR_TEXT," + secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.Kind != saml.MsgKindCRText || text.DynamicChallenge == nil || text.DynamicChallenge.Secrets.Prompt != secret {
+		t.Fatalf("CR_TEXT = %#v", text)
+	}
+}
+
+func TestMalformedDynamicChallengeErrorIsSecretSafe(t *testing.T) {
+	const secret = "SECRET_CHALLENGE_CANARY"
+	_, err := saml.ParseControlMsg("AUTH_FAILED,CRV1:R:" + secret)
+	if err == nil {
+		t.Fatal("expected malformed challenge error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error disclosed challenge: %v", err)
 	}
 }
 
@@ -73,6 +157,64 @@ func TestReadControlMsg(t *testing.T) {
 	}
 	if cm.Kind != saml.MsgKindPushReply {
 		t.Errorf("Kind = %v", cm.Kind)
+	}
+}
+
+type oneByteReader struct{ r *strings.Reader }
+
+func (r oneByteReader) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return r.r.Read(p)
+}
+
+func TestReadDynamicChallengeFragmented(t *testing.T) {
+	const wire = "CR_TEXT,fragmented secret prompt\x00"
+	cm, err := saml.ReadControlMsg(oneByteReader{r: strings.NewReader(wire)}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cm.Kind != saml.MsgKindCRText || cm.DynamicChallenge == nil || !cm.DynamicChallenge.Metadata.PromptPresent {
+		t.Fatalf("message = %#v", cm)
+	}
+}
+
+func TestReadControlMsgPreservesFollowingMessage(t *testing.T) {
+	r := strings.NewReader("CR_TEXT,first\x00INFO,second\x00")
+	first, err := saml.ReadControlMsg(r, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := saml.ReadControlMsg(r, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Raw != "CR_TEXT,first" || second.Raw != "INFO,second" {
+		t.Fatalf("messages = (%q, %q)", first.Raw, second.Raw)
+	}
+}
+
+func TestReadControlMsgLimit(t *testing.T) {
+	_, err := saml.ReadControlMsg(strings.NewReader("12345\x00"), 4)
+	if err == nil || !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("ReadControlMsg error = %v", err)
+	}
+}
+
+func TestWriteControlMsg(t *testing.T) {
+	var buf bytes.Buffer
+	if err := saml.WriteControlMsg(&buf, "AWS_CC_MSG,1,1,0,payload", 0); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "AWS_CC_MSG,1,1,0,payload\x00"; got != want {
+		t.Fatalf("message = %q, want %q", got, want)
+	}
+	if err := saml.WriteControlMsg(&buf, "bad\x00message", 0); err == nil {
+		t.Fatal("expected embedded-NUL error")
+	}
+	if err := saml.WriteControlMsg(&buf, "12345", 4); err == nil {
+		t.Fatal("expected size-limit error")
 	}
 }
 

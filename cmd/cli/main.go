@@ -30,6 +30,8 @@
 //	-pidfile         Write the daemon PID to this file (only used with -daemon).
 //	-logfile         Redirect daemon stdout+stderr to this file (only with -daemon;
 //	                 default: /dev/null).
+//	-debug           Enable additional protocol diagnostics; sensitive payloads
+//	                 remain redacted.
 //
 // # Daemon mode
 //
@@ -91,6 +93,7 @@ func main() {
 	pidFile := flag.String("pidfile", "", "write daemon PID to this file (requires -daemon)")
 	logFile := flag.String("logfile", "", "redirect daemon output to this file (requires -daemon)")
 	browserCmd := flag.String("browser", "", "browser command to open SAML URL (e.g. firefox, chromium); default: xdg-open")
+	debugMode := flag.Bool("debug", false, "enable additional protocol diagnostics (sensitive payloads remain redacted)")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, `openlawsvpn-cli — AWS Client VPN with SAML/SSO authentication
@@ -165,6 +168,9 @@ OPTIONS
 
   -browser <cmd>          Browser command to open the SAML URL.
                           Default: xdg-open. Example: -browser firefox
+
+  -debug                  Enable additional protocol diagnostics. Authentication,
+                          posture, and control-message payloads remain redacted.
 
   -h, -help               Print this help message.
 
@@ -266,13 +272,16 @@ RELAY ENDPOINTS
 				os.Exit(1)
 			}
 			fallbackProfile = fp
+			if *debugMode && fallbackProfile.Verb < 4 {
+				fallbackProfile.Verb = 4
+			}
 		}
 		runRelayMode(ctx, stop, fallbackProfile, relay.Config{
 			Token:    resolvedRelayToken,
 			Hostname: hostname,
 			AgentID:  *relayAgentID,
 			Endpoint: *relayEndpoint,
-		}, readyFD)
+		}, readyFD, *debugMode)
 		return
 	}
 
@@ -286,6 +295,9 @@ RELAY ENDPOINTS
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "openlawsvpn-cli: parse config: %v\n", err)
 		os.Exit(1)
+	}
+	if *debugMode && p.Verb < 4 {
+		p.Verb = 4
 	}
 
 	client := vpn.New(p)
@@ -354,6 +366,10 @@ RELAY ENDPOINTS
 			if reason == nil || ctx.Err() != nil {
 				// Clean disconnect or signal — exit.
 				fmt.Fprintln(os.Stderr, "openlawsvpn-cli: disconnected")
+				return
+			}
+			if errors.Is(reason, vpn.ErrPingExit) {
+				fmt.Fprintf(os.Stderr, "openlawsvpn-cli: tunnel stopped by ping-exit (%v)\n", reason)
 				return
 			}
 			// Unclean disconnect (dead link, keepalive timeout, etc.) — reconnect.
@@ -583,7 +599,7 @@ func isPermissionError(err error) bool {
 // Phase 2 credentials. Phase 1 and the SAML browser flow run on the app — not here.
 // runRelayMode starts the relay agent. fallback may be nil — the app always sends
 // ovpn_config in the phase2 payload, so a local profile is not required.
-func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, cfg relay.Config, readyFD int) {
+func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profile.Profile, cfg relay.Config, readyFD int, debug bool) {
 	cfg.Log = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
 
 	// agentPtr is set just after relay.New returns so the OnPhase2 closure can
@@ -628,6 +644,9 @@ func runRelayMode(ctx context.Context, stop context.CancelFunc, fallback *profil
 			connProfile = fallback
 		} else {
 			return fmt.Errorf("relay: no ovpn_config in payload and no -config flag provided")
+		}
+		if debug && connProfile.Verb < 4 {
+			connProfile.Verb = 4
 		}
 
 		client := vpn.New(connProfile)

@@ -43,6 +43,9 @@ func TestSessionMonitorAuthFailedCRV1(t *testing.T) {
 		if !errors.As(err, &se) {
 			t.Fatalf("expected *SessionExpiredError, got %T: %v", err, err)
 		}
+		if strings.Contains(se.Msg, "state") || se.Kind != saml.MsgKindAuthFailedCRV1 {
+			t.Fatalf("session error retained secret material: %#v", se)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout")
 	}
@@ -81,5 +84,45 @@ func TestSessionMonitorContextCancel(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout after context cancel")
+	}
+}
+
+func TestSessionMonitorDeliversApplicationMessages(t *testing.T) {
+	r := strings.NewReader("CR_TEXT,challenge\x00AUTH_FAILED\x00")
+	messages := make(chan string, 1)
+	mon := saml.NewSessionMonitorWithHandler(r, func(message *saml.ControlMessage) {
+		messages <- message.Raw
+	})
+	mon.Start(context.Background())
+
+	select {
+	case got := <-messages:
+		if got != "CR_TEXT,challenge" {
+			t.Fatalf("message = %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for control message")
+	}
+
+	select {
+	case err := <-mon.Done():
+		var expired *saml.SessionExpiredError
+		if !errors.As(err, &expired) {
+			t.Fatalf("expected session expiry after callback, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for monitor completion")
+	}
+}
+
+func TestSessionMonitorDeliversTypedCRText(t *testing.T) {
+	const secret = "SECRET_PROMPT_CANARY"
+	r := strings.NewReader("CR_TEXT," + secret + "\x00AUTH_FAILED\x00")
+	messages := make(chan *saml.ControlMessage, 1)
+	mon := saml.NewSessionMonitorWithHandler(r, func(message *saml.ControlMessage) { messages <- message })
+	mon.Start(context.Background())
+	got := <-messages
+	if got.Kind != saml.MsgKindCRText || got.DynamicChallenge == nil || got.DynamicChallenge.Secrets.Prompt != secret {
+		t.Fatalf("message = %#v", got)
 	}
 }

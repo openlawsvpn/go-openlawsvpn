@@ -5,7 +5,7 @@
 
 pkgbase=openlawsvpn
 pkgname=(openlawsvpn-daemon openlawsvpn-cli openlawsvpn-gui)
-pkgver=1.2.3
+pkgver=1.2.4
 pkgrel=2
 pkgdesc="AWS Client VPN client with SAML/SSO support — pure Go stack"
 arch=(x86_64 aarch64 powerpc64le)

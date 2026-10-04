@@ -8,6 +8,50 @@ canonical project history.
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-10-03
+
+### Added
+
+- Support AES-192-GCM negotiation and preserve AES-128/192/256-GCM key sizes
+  during data-channel rekeying.
+- Parse static `ping`, `ping-restart`, `ping-exit`, `keepalive`, and
+  `ifconfig-ipv6` profile directives.
+- Add bounded generic post-connect control-message callbacks and writes, with
+  mock-server round-trip coverage.
+- Add typed CRV1 and `CR_TEXT` dynamic-authentication challenge metadata while
+  keeping challenge state, usernames, and prompt text in explicitly sensitive
+  fields.
+- Add a distinct `reauth_required` client state so applications can distinguish
+  a fresh browser flow from an ordinary transport retry.
+- Add deduplicated route and DNS drift events for VPN-owned host configuration.
+- Classify AWS device-posture fragment headers and refresh intervals, and emit
+  payload-redacted diagnostics when posture-related control messages appear.
+- Add a CLI `-debug` option for additional payload-redacted protocol metadata.
+
+### Changed
+
+- Advertise only implemented AES-GCM cipher suites, use AWS's 1450-byte default
+  MSS packet budget, and begin reconnect backoff at five seconds.
+- Include IPv6 tunnel addressing in mobile configuration JSON.
+
+### Fixed
+
+- Apply pushed-over-static and last-option-wins keepalive semantics; treat
+  `ping-exit` as terminal instead of reconnecting automatically.
+- Preserve fragmented and coalesced TLS application messages, transfer control
+  ownership when a rekey becomes primary, and keep direct-auth sessions reading
+  from the live TLS stream after replaying `PUSH_REPLY`.
+- Clear rejected SAML assertions synchronously and deduplicate concurrent
+  session-expiry outcomes, preventing reconnect paths from reusing consumed
+  credentials or starting multiple authentication flows.
+- Keep dynamic challenge payloads out of generic errors and session-expiry
+  classifications.
+- Track exact route and DNS ownership per client, restore only missing owned
+  state, and preserve pre-existing routes or later administrator changes during
+  repair and teardown.
+- Keep UDP tunnels alive across brief physical-network outages instead of
+  tearing down immediately on transient unreachable/down write errors.
+
 ## [1.2.3] - 2026-08-19
 
 ### Fixed
@@ -112,7 +156,8 @@ canonical project history.
 - Configure full and split DNS for VPC-private resources on iOS.
 - Refresh the GTK profile list immediately after deleting a profile.
 
-[Unreleased]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.3...HEAD
+[Unreleased]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.3...v1.2.4
 [1.2.3]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.2...v1.2.3
 [1.2.2]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/openlawsvpn/go-openlawsvpn/compare/v1.2.0...v1.2.1

@@ -4,7 +4,8 @@ Pure-Go OpenVPN3 client protocol implementation — AWS Client VPN + SAML/CRV1 f
 
 Zero C dependencies. `CGO_ENABLED=0` builds a fully static binary.
 `gomobile bind` produces an `.aar` for Android without NDK or CMake.
-See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes.
+See [CHANGELOG.md](CHANGELOG.md) for project-wide release notes and
+[TODO.md](TODO.md) for the public engineering backlog.
 
 ## Status
 
@@ -46,6 +47,8 @@ CGO_ENABLED=0 go build -o openlawsvpn-cli ./cmd/cli
 sudo ./openlawsvpn-cli -config your.ovpn
 
 # Add "verb 4" to the profile to log the verified server certificate.
+# Or pass -debug for additional payload-redacted protocol diagnostics.
+sudo ./openlawsvpn-cli -debug -config your.ovpn
 
 # Public relay demo.
 sudo ./openlawsvpn-cli -relay default -daemon \

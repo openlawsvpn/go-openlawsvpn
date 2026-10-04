@@ -94,6 +94,14 @@ func (d *DaemonService) Connect(profilePath, profileContent string) *dbus.Error 
 		case vpn.EventLog:
 			log.Printf("vpn: %s", e.Message)
 			d.emitLogLine(e.Message)
+		case vpn.EventRouteDrift:
+			message := fmt.Sprintf("vpn: route %s: %s", e.Message, e.Resource)
+			log.Print(message)
+			d.emitLogLine(message)
+		case vpn.EventDNSDrift:
+			message := fmt.Sprintf("vpn: DNS %s", e.Message)
+			log.Print(message)
+			d.emitLogLine(message)
 		}
 	}
 
@@ -284,6 +292,14 @@ func (d *DaemonService) ConnectRelay(profilePath, profileContent, agentID, orgTo
 		case vpn.EventLog:
 			log.Printf("relay vpn: %s", e.Message)
 			d.emitLogLine(e.Message)
+		case vpn.EventRouteDrift:
+			message := fmt.Sprintf("vpn: route %s: %s", e.Message, e.Resource)
+			log.Print(message)
+			d.emitLogLine(message)
+		case vpn.EventDNSDrift:
+			message := fmt.Sprintf("vpn: DNS %s", e.Message)
+			log.Print(message)
+			d.emitLogLine(message)
 		}
 	}
 

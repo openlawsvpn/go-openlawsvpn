@@ -2,6 +2,7 @@
 //
 // Supported ciphers:
 //   - AES-256-GCM  (primary, used by AWS Client VPN)
+//   - AES-192-GCM
 //   - AES-128-GCM
 //   - AES-256-CBC  (legacy, no AEAD tag — separate HMAC-SHA256 required)
 //
@@ -46,6 +47,8 @@ const (
 	SuiteAES256GCM Suite = iota
 	// SuiteAES128GCM is AES-128-GCM.
 	SuiteAES128GCM
+	// SuiteAES192GCM is AES-192-GCM.
+	SuiteAES192GCM
 	// SuiteAES256CBC is AES-256-CBC with HMAC-SHA256 (legacy).
 	SuiteAES256CBC
 )
@@ -57,6 +60,8 @@ func ParseSuite(name string) (Suite, error) {
 		return SuiteAES256GCM, nil
 	case "AES-128-GCM":
 		return SuiteAES128GCM, nil
+	case "AES-192-GCM":
+		return SuiteAES192GCM, nil
 	case "AES-256-CBC":
 		return SuiteAES256CBC, nil
 	default:
@@ -79,7 +84,7 @@ type GCMCipher struct {
 
 // NewGCMCipher creates a GCMCipher from a raw AES key and a nonce tail.
 //
-//   - key:       16 bytes for AES-128-GCM, 32 bytes for AES-256-GCM
+//   - key:       16, 24, or 32 bytes for AES-128/192/256-GCM
 //   - nonceTail: 8 bytes — the last 8 bytes of the 12-byte GCM nonce
 //     (set from the first 8 bytes of the HMAC key slice via set_tail in
 //     openvpn3-core crypto_aead.hpp).

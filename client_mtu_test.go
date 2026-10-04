@@ -45,7 +45,7 @@ func TestBuildTunnelOptionsUsesConfiguredMTU(t *testing.T) {
 	}
 }
 
-func TestEffectiveMSSFixMatchesOpenVPN2Default(t *testing.T) {
+func TestEffectiveMSSFixMatchesAWSDefault(t *testing.T) {
 	profileWithoutMSSFix := &profile.Profile{}
 
 	tests := []struct {
@@ -67,7 +67,7 @@ func TestEffectiveMSSFixMatchesOpenVPN2Default(t *testing.T) {
 			proto:   profile.ProtoUDP,
 			cipher:  "AES-256-GCM",
 			remote:  &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 443},
-			wantMTU: 1440,
+			wantMTU: 1398,
 		},
 		{
 			name:    "default UDP over IPv6 AES-GCM",
@@ -76,7 +76,25 @@ func TestEffectiveMSSFixMatchesOpenVPN2Default(t *testing.T) {
 			proto:   profile.ProtoUDP,
 			cipher:  "AES-256-GCM",
 			remote:  &net.UDPAddr{IP: net.ParseIP("2001:db8::1"), Port: 443},
-			wantMTU: 1420,
+			wantMTU: 1378,
+		},
+		{
+			name:    "default TCP over IPv4 AES-GCM",
+			profile: profileWithoutMSSFix,
+			tunMTU:  1500,
+			proto:   profile.ProtoTCP,
+			cipher:  "AES-256-GCM",
+			remote:  &net.TCPAddr{IP: net.ParseIP("192.0.2.1"), Port: 443},
+			wantMTU: 1384,
+		},
+		{
+			name:    "default TCP over IPv6 AES-GCM",
+			profile: profileWithoutMSSFix,
+			tunMTU:  1500,
+			proto:   profile.ProtoTCP,
+			cipher:  "AES-256-GCM",
+			remote:  &net.TCPAddr{IP: net.ParseIP("2001:db8::1"), Port: 443},
+			wantMTU: 1364,
 		},
 		{
 			name:        "LZ4 framing uses one byte of the packet budget",
@@ -86,7 +104,7 @@ func TestEffectiveMSSFixMatchesOpenVPN2Default(t *testing.T) {
 			cipher:      "AES-256-GCM",
 			compression: compress.ModeLZ4,
 			remote:      &net.UDPAddr{IP: net.ParseIP("192.0.2.1"), Port: 443},
-			wantMTU:     1439,
+			wantMTU:     1397,
 		},
 		{
 			name:      "server MSS takes precedence",

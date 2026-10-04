@@ -136,7 +136,7 @@ type PushOptions struct {
 
 	// Cipher is the data-channel cipher negotiated with the server (e.g. "AES-256-GCM").
 	// Empty means the server did not push a cipher directive; the client falls back
-	// to AES-256-GCM (the only cipher advertised in IV_CIPHERS).
+	// to AES-256-GCM. Supported negotiation choices are advertised in IV_CIPHERS.
 	//
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_data_channel_options()
 	// line ~753: parses "cipher <name>" and validates it against IV_NCP.
@@ -165,8 +165,14 @@ type PushOptions struct {
 	// load_duration_parm(keepalive_timeout, "ping-restart", ...) line ~1255.
 	PingRestart int
 
+	// PingExit is the terminal keepalive receive timeout in seconds (from
+	// "ping-exit N"). It is mutually exclusive with PingRestart; the last
+	// timeout directive in the reply wins.
+	PingExit int
+
 	// Mssfix is the MSS clamp value in bytes pushed by the server (from "mssfix N").
-	// 0 means not pushed; client should use profile value or default (1492 for TCP, 1450 for UDP).
+	// 0 means not pushed; client should use its profile value or AWS-compatible
+	// default.
 	//
 	// Reference: openvpn3-core ssl/proto.hpp parse_pushed_mssfix() line ~925.
 	Mssfix int
@@ -431,6 +437,30 @@ func ParsePushReply(msg string) (*PushOptions, error) {
 				var v int
 				if _, err := fmt.Sscanf(parts[1], "%d", &v); err == nil && v > 0 {
 					opts.PingRestart = v
+					opts.PingExit = 0
+				}
+			}
+
+		case "ping-exit":
+			if len(parts) >= 2 {
+				var v int
+				if _, err := fmt.Sscanf(parts[1], "%d", &v); err == nil && v > 0 {
+					opts.PingExit = v
+					opts.PingRestart = 0
+				}
+			}
+
+		case "keepalive":
+			// keepalive <ping> <timeout> is shorthand for ping plus
+			// ping-restart. It always selects reconnect rather than ping-exit.
+			if len(parts) >= 3 {
+				var ping, timeout int
+				if _, err := fmt.Sscanf(parts[1], "%d", &ping); err == nil && ping > 0 {
+					opts.PingInterval = ping
+				}
+				if _, err := fmt.Sscanf(parts[2], "%d", &timeout); err == nil && timeout > 0 {
+					opts.PingRestart = timeout
+					opts.PingExit = 0
 				}
 			}
 

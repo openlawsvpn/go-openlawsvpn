@@ -36,3 +36,27 @@ func TestBuildIfconfigJSONIncludesDNSDomains(t *testing.T) {
 		t.Errorf("route_domains = %v, want %v", got.RouteDomains, want)
 	}
 }
+
+func TestBuildIfconfigJSONIncludesIPv6(t *testing.T) {
+	gotJSON := buildIfconfigJSON(&routing.PushOptions{
+		Ifconfig6: &routing.Ifconfig6{
+			Local:   net.ParseIP("2001:db8::2"),
+			Prefix:  64,
+			Gateway: net.ParseIP("2001:db8::1"),
+		},
+		RedirectGateway6: true,
+	}, nil, 1420)
+
+	var got struct {
+		Local            string `json:"local6"`
+		Prefix           int    `json:"prefix6"`
+		Gateway          string `json:"gateway6"`
+		RedirectGateway6 bool   `json:"redirect_gateway6"`
+	}
+	if err := json.Unmarshal([]byte(gotJSON), &got); err != nil {
+		t.Fatalf("unmarshal tunnel config: %v", err)
+	}
+	if got.Local != "2001:db8::2" || got.Prefix != 64 || got.Gateway != "2001:db8::1" || !got.RedirectGateway6 {
+		t.Fatalf("IPv6 config = %+v", got)
+	}
+}

@@ -227,6 +227,31 @@ func TestParsePushReply_Keepalive(t *testing.T) {
 	}
 }
 
+func TestParsePushReply_PingTimeoutLastOptionWins(t *testing.T) {
+	tests := []struct {
+		name        string
+		message     string
+		wantPing    int
+		wantRestart int
+		wantExit    int
+	}{
+		{name: "exit last", message: "PUSH_REPLY,ping-restart 20,ping-exit 30", wantExit: 30},
+		{name: "restart last", message: "PUSH_REPLY,ping-exit 30,ping-restart 20", wantRestart: 20},
+		{name: "keepalive", message: "PUSH_REPLY,ping-exit 30,keepalive 5 25", wantPing: 5, wantRestart: 25},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts, err := ParsePushReply(tt.message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opts.PingInterval != tt.wantPing || opts.PingRestart != tt.wantRestart || opts.PingExit != tt.wantExit {
+				t.Fatalf("keepalive = (%d, %d, %d), want (%d, %d, %d)", opts.PingInterval, opts.PingRestart, opts.PingExit, tt.wantPing, tt.wantRestart, tt.wantExit)
+			}
+		})
+	}
+}
+
 func TestParsePushReply_ProtocolFlagsTLSEKM(t *testing.T) {
 	msg := "PUSH_REPLY,protocol-flags cc-exit tls-ekm dyn-tls-crypt,cipher AES-256-GCM"
 	opts, err := ParsePushReply(msg)

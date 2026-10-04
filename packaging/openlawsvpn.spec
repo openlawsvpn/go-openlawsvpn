@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 %global debug_package %{nil}
 Name:           openlawsvpn
-Version:        1.2.3
+Version:        1.2.4
 Release:        1%{?dist}
 Summary:        AWS Client VPN client with SAML/SSO support — pure Go stack
 
@@ -197,6 +197,23 @@ update-desktop-database %{_datadir}/applications &>/dev/null || :
 # ── Changelog ─────────────────────────────────────────────────────────────────
 
 %changelog
+* Sat Oct  3 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.4-1
+- compat(vpn): add AES-192-GCM, static keepalive and IPv6 profile options,
+  AWS-compatible MSS defaults, and five-second reconnect backoff
+- feat(vpn): add bounded post-connect control-message callbacks and writes
+- feat(auth): classify CRV1 and CR_TEXT challenges with secret-safe typed
+  metadata and expose a distinct reauthentication-required state
+- fix(vpn): preserve negotiated cipher and control ownership across rekeys,
+  honor terminal ping-exit, and retain live TLS reads after PUSH_REPLY
+- security(auth): clear rejected SAML assertions before reconnect and
+  deduplicate concurrent session-expiry outcomes
+- feat(network): emit deduplicated route and DNS drift events and restore only
+  missing state owned by the current VPN instance
+- fix(network): preserve pre-existing routes and later administrator DNS or
+  route changes during repair and disconnect cleanup
+- feat(debug): report AWS posture control-message metadata without logging
+  challenge text, fragments, tokens, or other sensitive payloads
+
 * Wed Aug 19 2026 Anatolii Vorona <vorona.tolik@gmail.com> - 1.2.3-1
 - fix(vpn): require fresh SAML authentication when AWS rejects cached CRV1
   credentials after a network interruption

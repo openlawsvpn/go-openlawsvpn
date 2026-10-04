@@ -1,6 +1,10 @@
 package vpn
 
 import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +27,95 @@ func securityTestClient(t *testing.T) *Client {
 	c.challenge = &saml.Challenge{StateID: "CANARY_STATE", SAMLURL: "https://idp.example/canary"}
 	c.pushOpts = &routing.PushOptions{AuthToken: "CANARY_AUTH_TOKEN"}
 	return c
+}
+
+func TestControlMessageDiagnosticsRedactSensitivePayloads(t *testing.T) {
+	c := securityTestClient(t)
+	var messages []string
+	c.EventFn = func(event Event) {
+		if event.Type == EventLog {
+			messages = append(messages, event.Message)
+		}
+	}
+
+	const challengeSecret = "SECRET_CHALLENGE_CANARY"
+	challenge, err := saml.ParseControlMsg("CR_TEXT," + challengeSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.emitControlMessageDiagnostic("received", challenge)
+
+	const fragmentSecret = "SECRET_POSTURE_FRAGMENT"
+	fragment, err := saml.ParseControlMsg("AWS_CC_MSG,1791062400123456,2,1," + fragmentSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.emitControlMessageDiagnostic("received", fragment)
+
+	joined := strings.Join(messages, "\n")
+	if strings.Contains(joined, challengeSecret) || strings.Contains(joined, fragmentSecret) {
+		t.Fatalf("diagnostics disclosed sensitive payload: %s", joined)
+	}
+	for _, want := range []string{"kind=CR_TEXT", "payload_bytes=", "fragments=2", "index=1", "payload=redacted"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("diagnostics missing %q: %s", want, joined)
+		}
+	}
+}
+
+func TestReconnectAfterSessionExpiryDoesNotReuseAssertion(t *testing.T) {
+	c := securityTestClient(t)
+	c.state = stateDisconnected
+	c.doneErr = &saml.SessionExpiredError{Msg: saml.MsgKindAuthFailed.String(), Kind: saml.MsgKindAuthFailed}
+	c.reauthRequired = true
+	close(c.doneCh)
+
+	err := c.Reconnect(context.Background())
+	if !errors.Is(err, ErrReauthRequired) {
+		t.Fatalf("Reconnect error = %v, want ErrReauthRequired", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cachedSAMLToken != "" || c.cachedStateID != "" || c.cachedPhase1IP != "" {
+		t.Fatal("Reconnect retained a server-rejected authentication context")
+	}
+}
+
+func TestReauthRequiredStateString(t *testing.T) {
+	if got := StateReauthRequired.String(); got != "reauth_required" {
+		t.Fatalf("StateReauthRequired.String() = %q", got)
+	}
+}
+
+func TestConcurrentSessionExpiryEmitsOneReauthOutcome(t *testing.T) {
+	c := securityTestClient(t)
+	c.state = stateTunnelUp
+	var outcomes atomic.Int32
+	c.EventFn = func(event Event) {
+		if event.Type == EventStateChanged && event.State == StateReauthRequired {
+			outcomes.Add(1)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.cancelFn = cancel
+	c.wg.Add(2)
+	go c.sessionMonitorFor(ctx, strings.NewReader("AUTH_FAILED\x00"))
+	go c.sessionMonitorFor(ctx, strings.NewReader("AUTH_FAILED,CRV1:R:state::https://idp.example\x00"))
+
+	select {
+	case <-c.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for concurrent expiry teardown")
+	}
+	if got := outcomes.Load(); got != 1 {
+		t.Fatalf("reauth outcomes = %d, want 1", got)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cachedSAMLToken != "" || c.cachedStateID != "" {
+		t.Fatal("expiry retained consumed authentication credentials")
+	}
 }
 
 func TestExplicitDisconnectClearsCredentials(t *testing.T) {

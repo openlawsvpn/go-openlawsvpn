@@ -54,6 +54,7 @@ func FuzzParseControlMsg(f *testing.F) {
 	f.Add("PUSH_REPLY,ifconfig 10.0.0.6 10.0.0.5")
 	f.Add("AUTH_FAILED,CRV1:R:state:user:https://example.com")
 	f.Add("AUTH_FAILED")
+	f.Add("CR_TEXT,enter verification code")
 	f.Add("")
 	f.Add(strings.Repeat("A", 1024))
 	f.Add("PUSH_REPLY," + strings.Repeat("x,", 500))
