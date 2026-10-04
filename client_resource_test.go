@@ -45,3 +45,42 @@ func TestResourceDriftEventsAreDeduplicated(t *testing.T) {
 		t.Fatal("test administrator route was unexpectedly changed")
 	}
 }
+
+func TestResourceDriftReportsSuccessfulRouteRestoration(t *testing.T) {
+	p, err := profile.ParseString("remote vpn.example.com 443\nproto tcp-client\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(p)
+	want := routing.RouteIdentity{Destination: "10.130.0.0/16", Gateway: "172.16.76.1", Interface: 5}
+	present := false
+	c.routeOwnership = routing.NewOwnership(
+		[]routing.RouteIdentity{want},
+		func(string) (*routing.RouteIdentity, error) {
+			if !present {
+				return nil, nil
+			}
+			got := want
+			return &got, nil
+		},
+		func(routing.RouteIdentity) error {
+			present = true
+			return nil
+		},
+		nil,
+	)
+
+	var got Event
+	c.EventFn = func(event Event) {
+		if event.Type == EventRouteDrift {
+			got = event
+		}
+	}
+	c.checkResourceDrift(make(map[string]bool))
+	if !present {
+		t.Fatal("missing route was not restored")
+	}
+	if got.Resource != want.Destination || got.Message != "restored" {
+		t.Fatalf("event = %#v, want restored %s", got, want.Destination)
+	}
+}

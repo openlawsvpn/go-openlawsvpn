@@ -80,7 +80,8 @@ type Event struct {
 	ServerIP string
 
 	// Resource identifies the route destination or DNS resource for a drift
-	// event. Message contains only a non-sensitive classification.
+	// event. Message contains only a non-sensitive outcome classification such
+	// as "restored", "missing", or "changed".
 	Resource string
 
 	// Stats is set when Type == EventStatsUpdate.

@@ -313,6 +313,10 @@ func (c *Client) emit(e Event) {
 		fmt.Fprintf(os.Stderr, "%s\n", e.Message)
 	case EventStateChanged:
 		fmt.Fprintf(os.Stderr, "vpn: state → %s\n", e.State)
+	case EventRouteDrift:
+		fmt.Fprintf(os.Stderr, "vpn: route %s: %s\n", e.Message, e.Resource)
+	case EventDNSDrift:
+		fmt.Fprintf(os.Stderr, "vpn: DNS %s\n", e.Message)
 	}
 }
 
@@ -2801,7 +2805,11 @@ func (c *Client) checkResourceDrift(reported map[string]bool) {
 			key := fmt.Sprintf("route:%d:%s", item.Kind, item.Destination)
 			active[key] = true
 			if !reported[key] {
-				c.emit(Event{Type: EventRouteDrift, Resource: item.Destination, Message: routeDriftName(item.Kind)})
+				message := routeDriftName(item.Kind)
+				if item.Kind == routing.DriftMissing && err == nil {
+					message = "restored"
+				}
+				c.emit(Event{Type: EventRouteDrift, Resource: item.Destination, Message: message})
 			}
 		}
 		for key := range reported {
@@ -2820,7 +2828,11 @@ func (c *Client) checkResourceDrift(reported map[string]bool) {
 		}
 		key := fmt.Sprintf("dns:%d", kind)
 		if drifted && !reported[key] {
-			c.emit(Event{Type: EventDNSDrift, Resource: "dns", Message: dnsDriftName(kind)})
+			message := dnsDriftName(kind)
+			if kind == dns.DriftMissing && err == nil {
+				message = "restored"
+			}
+			c.emit(Event{Type: EventDNSDrift, Resource: "dns", Message: message})
 			reported[key] = true
 		}
 		if !drifted {

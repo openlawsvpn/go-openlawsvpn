@@ -105,6 +105,10 @@ func NewMobileClient(profileContent string, cb MobileCallbacks) *MobileClient {
 				} else {
 					cb.Log(fmt.Sprintf("vpn: state → %s", e.State))
 				}
+			case EventRouteDrift:
+				cb.Log(fmt.Sprintf("vpn: route %s: %s", e.Message, e.Resource))
+			case EventDNSDrift:
+				cb.Log(fmt.Sprintf("vpn: DNS %s", e.Message))
 			}
 		}
 	}
