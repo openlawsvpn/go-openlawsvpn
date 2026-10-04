@@ -49,6 +49,8 @@ canonical project history.
 - Track exact route and DNS ownership per client, restore only missing owned
   state, and preserve pre-existing routes or later administrator changes during
   repair and teardown.
+- Keep UDP tunnels alive across brief physical-network outages instead of
+  tearing down immediately on transient unreachable/down write errors.
 
 ## [1.2.3] - 2026-08-19
 

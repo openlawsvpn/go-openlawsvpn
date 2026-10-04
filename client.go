@@ -2149,6 +2149,7 @@ func buildTLSConfig(p *profile.Profile, extraKeyLog io.Writer) (*tls.Config, err
 func (c *Client) tunToWire(ctx context.Context) {
 	defer c.wg.Done()
 	buf := make([]byte, 65535)
+	linkWriteUnavailable := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -2171,8 +2172,19 @@ func (c *Client) tunToWire(ctx context.Context) {
 			continue
 		}
 		if werr := c.writePacket(c.rawConn, wire); werr != nil {
-			// Write failed — the TCP socket is dead. Set the disconnect reason and
-			// trigger cleanup so keepaliveLoop / sessionMonitor don't keep running.
+			// A connected UDP socket reports the loss of its physical route
+			// immediately. Keep the tunnel and its SAML-authenticated session alive
+			// while Wi-Fi is briefly unavailable; keepalive timeout remains the
+			// authority for deciding that the peer is actually gone.
+			if c.prof.Proto == profile.ProtoUDP && isTransientLinkWriteError(werr) {
+				if !linkWriteUnavailable {
+					c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: transport temporarily unavailable: %v", werr)})
+					linkWriteUnavailable = true
+				}
+				continue
+			}
+			// A non-transient write failure means the transport is unusable. Set the
+			// disconnect reason and stop the other session goroutines.
 			c.mu.Lock()
 			if c.doneErr == nil {
 				c.doneErr = fmt.Errorf("vpn: tunToWire: write error: %w", werr)
@@ -2181,8 +2193,19 @@ func (c *Client) tunToWire(ctx context.Context) {
 			c.disconnect(true) //nolint:errcheck
 			return
 		}
+		if linkWriteUnavailable {
+			c.emit(Event{Type: EventLog, Message: "vpn: transport available again"})
+			linkWriteUnavailable = false
+		}
 		c.bytesSent.Add(uint64(n))
 	}
+}
+
+func isTransientLinkWriteError(err error) bool {
+	return errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETDOWN) ||
+		errors.Is(err, syscall.EADDRNOTAVAIL)
 }
 
 // clampMSS applies either an explicit MSS value from the profile/server or
