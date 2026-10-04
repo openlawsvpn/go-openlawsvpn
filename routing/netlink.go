@@ -423,8 +423,10 @@ func lookupRouteIdentity6(dst net.IP, prefix int) (*RouteIdentity, error) {
 	return queryRouteIdentity(dst.To16(), prefix, unix.AF_INET6)
 }
 
-// queryRouteIdentity asks the kernel for the selected route and accepts it
-// only when its destination prefix exactly matches the owned destination.
+// queryRouteIdentity enumerates the main routing table and returns only an
+// exact destination-prefix match. RTM_GETROUTE resolution queries cannot be
+// used here: Linux commonly answers a query for a /16 route with a resolved
+// /32 result, which would make an existing owned route appear missing.
 func queryRouteIdentity(dst net.IP, prefix, family int) (*RouteIdentity, error) {
 	sock, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
 	if err != nil {
@@ -434,25 +436,65 @@ func queryRouteIdentity(dst net.IP, prefix, family int) (*RouteIdentity, error) 
 	if err := unix.Bind(sock, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return nil, err
 	}
-	rt := unix.RtMsg{Family: uint8(family), Dst_len: uint8(prefix), Table: unix.RT_TABLE_MAIN}
+	rt := unix.RtMsg{Family: uint8(family), Table: unix.RT_TABLE_MAIN}
 	payload := marshalRtMsg(rt)
-	if prefix > 0 {
-		payload = append(payload, nlAttr(unix.RTA_DST, dst)...)
-	}
-	hdr := unix.NlMsghdr{Len: uint32(nlmsgHdrSize + len(payload)), Type: unix.RTM_GETROUTE, Flags: unix.NLM_F_REQUEST, Seq: 3, Pid: uint32(unix.Getpid())}
+	hdr := unix.NlMsghdr{Len: uint32(nlmsgHdrSize + len(payload)), Type: unix.RTM_GETROUTE, Flags: unix.NLM_F_REQUEST | unix.NLM_F_DUMP, Seq: 3, Pid: uint32(unix.Getpid())}
 	msg := append(marshalNlHdr(hdr), payload...)
 	if err := unix.Sendto(sock, msg, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return nil, err
 	}
-	buf := make([]byte, 8192)
-	n, _, err := unix.Recvfrom(sock, buf, 0)
-	if err != nil {
-		if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ENOENT) {
+	buf := make([]byte, 64*1024)
+	for {
+		n, _, err := unix.Recvfrom(sock, buf, 0)
+		if err != nil {
+			if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ENOENT) {
+				return nil, nil
+			}
+			return nil, err
+		}
+		identity, done, err := findRouteIdentity(buf[:n], dst, prefix)
+		if err != nil || identity != nil {
+			return identity, err
+		}
+		if done {
 			return nil, nil
 		}
-		return nil, err
 	}
-	return parseRouteIdentity(buf[:n], dst, prefix)
+}
+
+func findRouteIdentity(buf, expectedDst []byte, expectedPrefix int) (*RouteIdentity, bool, error) {
+	for len(buf) >= nlmsgHdrSize {
+		length := int(binary.LittleEndian.Uint32(buf[:4]))
+		if length < nlmsgHdrSize || length > len(buf) {
+			return nil, false, fmt.Errorf("routing: malformed netlink route dump")
+		}
+		msg := buf[:length]
+		switch binary.LittleEndian.Uint16(msg[4:6]) {
+		case unix.NLMSG_DONE:
+			return nil, true, nil
+		case unix.NLMSG_ERROR:
+			if len(msg) < nlmsgHdrSize+4 {
+				return nil, false, fmt.Errorf("routing: short netlink error")
+			}
+			errno := int32(binary.LittleEndian.Uint32(msg[nlmsgHdrSize:]))
+			if errno != 0 {
+				return nil, false, syscall.Errno(-errno)
+			}
+		case unix.RTM_NEWROUTE:
+			if len(msg) >= nlmsgHdrSize+12 && msg[nlmsgHdrSize+4] == unix.RT_TABLE_MAIN {
+				identity, err := parseRouteIdentity(msg, expectedDst, expectedPrefix)
+				if err != nil || identity != nil {
+					return identity, false, err
+				}
+			}
+		}
+		aligned := (length + 3) &^ 3
+		if aligned > len(buf) {
+			return nil, false, fmt.Errorf("routing: malformed aligned netlink message")
+		}
+		buf = buf[aligned:]
+	}
+	return nil, false, nil
 }
 
 func parseRouteIdentity(buf, expectedDst []byte, expectedPrefix int) (*RouteIdentity, error) {

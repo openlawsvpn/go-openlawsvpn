@@ -2794,7 +2794,7 @@ func (c *Client) checkResourceDrift(reported map[string]bool) {
 	if c.routeOwnership != nil {
 		drift, err := c.routeOwnership.Repair()
 		if err != nil {
-			c.emit(Event{Type: EventLog, Message: "vpn: route restoration failed"})
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: route restoration failed: %v", err)})
 		}
 		active := make(map[string]bool)
 		for _, item := range drift {
@@ -2816,7 +2816,7 @@ func (c *Client) checkResourceDrift(reported map[string]bool) {
 	if c.dnsOwnership != nil {
 		kind, drifted, err := c.dnsOwnership.Repair()
 		if err != nil {
-			c.emit(Event{Type: EventLog, Message: "vpn: DNS restoration failed"})
+			c.emit(Event{Type: EventLog, Message: fmt.Sprintf("vpn: DNS restoration failed: %v", err)})
 		}
 		key := fmt.Sprintf("dns:%d", kind)
 		if drifted && !reported[key] {
